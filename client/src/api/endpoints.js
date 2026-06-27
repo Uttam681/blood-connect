@@ -18,6 +18,15 @@ export const getNearbyRequests = (radiusKm) =>
 export const getMyPatientProfile = () => api.get("/patients/me");
 export const updatePatientProfile = (data) => api.patch("/patients/me", data);
 
+// Admin
+export const adminGetUsers = () => api.get("/admin/users");
+export const adminGetDonors = () => api.get("/admin/donors");
+export const adminGetPatients = () => api.get("/admin/patients");
+export const adminGetRequests = () => api.get("/admin/requests");
+export const adminToggleDonorAvailability = (id) => api.patch(`/admin/donors/${id}/availability`);
+export const adminUpdateUserRole = (id, role) => api.patch(`/admin/users/${id}/role`, { role });
+export const adminDeleteUser = (id) => api.delete(`/admin/users/${id}`);
+
 // Requests
 export const createRequest = (data) => api.post("/requests", data);
 export const getMyRequests = () => api.get("/requests/me");

@@ -26,10 +26,10 @@ export default function Navbar() {
                 Find Donors
               </Link>
               <Link
-                to="/dashboard"
+                to={user.role === "admin" ? "/admin" : "/dashboard"}
                 className="text-gray-600 hover:text-brand text-sm font-medium"
               >
-                Dashboard
+                {user.role === "admin" ? "Admin" : "Dashboard"}
               </Link>
               <span className="text-sm text-gray-500 hidden sm:inline">
                 {user.name} ({user.role})

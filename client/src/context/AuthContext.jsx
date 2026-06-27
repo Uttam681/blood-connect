@@ -33,13 +33,18 @@ export function AuthProvider({ children }) {
     return res.data.user;
   };
 
+  const loginWithToken = (token, partialUser) => {
+    localStorage.setItem("token", token);
+    setUser(partialUser);
+  };
+
   const logout = () => {
     localStorage.removeItem("token");
     setUser(null);
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout }}>
+    <AuthContext.Provider value={{ user, loading, login, register, logout, loginWithToken }}>
       {children}
     </AuthContext.Provider>
   );

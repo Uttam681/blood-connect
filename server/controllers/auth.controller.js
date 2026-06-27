@@ -101,4 +101,24 @@ const getMe = async (req, res, next) => {
   }
 };
 
-module.exports = { register, login, getMe };
+// GET /api/auth/google/callback
+const googleCallback = (req, res, next) => {
+  passport.authenticate("google", { session: false }, (err, result) => {
+    if (err || !result) {
+      return res.redirect(
+        `${process.env.CLIENT_ORIGIN}/login?error=google_failed`
+      );
+    }
+    const { user, isNew } = result;
+    const token = generateToken(user);
+    const params = new URLSearchParams({
+      token,
+      name: user.name,
+      role: user.role,
+      isNew: isNew ? "1" : "0",
+    });
+    res.redirect(`${process.env.CLIENT_ORIGIN}/oauth/callback?${params}`);
+  })(req, res, next);
+};
+
+module.exports = { register, login, getMe, googleCallback };

@@ -45,7 +45,7 @@ export default function DonorList() {
 
     if (filters.location) {
       try {
-        const [lng, lat] = await geocodeAddress(filters.location);
+        const { coordinates: [lng, lat] } = await geocodeAddress(filters.location);
         params.lat = lat;
         params.lng = lng;
         params.radiusKm = filters.radiusKm;

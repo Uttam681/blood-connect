@@ -4,6 +4,7 @@ dist/
 .DS_Store
 *.log
 .idea/
+.claude/
 
 # Unrelated scratch files
 solution.js

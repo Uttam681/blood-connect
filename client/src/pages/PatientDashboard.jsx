@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   createRequest,
+  getMyPatientProfile,
   getMyRequests,
   updateRequestStatus,
 } from "../api/endpoints";
@@ -24,6 +25,7 @@ export default function PatientDashboard() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [defaultCity, setDefaultCity] = useState("");
 
   const [form, setForm] = useState({
     bloodGroup: "O+",
@@ -48,6 +50,9 @@ export default function PatientDashboard() {
 
   useEffect(() => {
     loadRequests();
+    getMyPatientProfile()
+      .then((res) => setDefaultCity(res.data.patient?.defaultCity || ""))
+      .catch(() => {});
   }, []);
 
   const handleChange = (e) =>
@@ -59,7 +64,24 @@ export default function PatientDashboard() {
     setSuccess("");
     setSubmitting(true);
     try {
-      const coordinates = await geocodeAddress(form.hospitalName);
+      // If the hospital name doesn't already mention the patient's city,
+      // append it so ambiguous names (e.g. "Apollo Hospital") resolve to
+      // the right city instead of a same-named hospital elsewhere in India.
+      const query =
+        defaultCity && !form.hospitalName.toLowerCase().includes(defaultCity.toLowerCase())
+          ? `${form.hospitalName}, ${defaultCity}`
+          : form.hospitalName;
+
+      const { coordinates, displayName } = await geocodeAddress(query);
+
+      const proceed = window.confirm(
+        `Resolved location:\n${displayName}\n\nUse this location for your request?`
+      );
+      if (!proceed) {
+        setSubmitting(false);
+        return;
+      }
+
       const res = await createRequest({
         bloodGroup: form.bloodGroup,
         unitsNeeded: Number(form.unitsNeeded),

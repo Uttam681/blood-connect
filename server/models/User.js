@@ -11,8 +11,9 @@ const userSchema = new mongoose.Schema(
       lowercase: true,
       trim: true,
     },
-    password: { type: String, required: true, minlength: 6, select: false },
-    phone: { type: String, required: true, trim: true },
+    password: { type: String, minlength: 6, select: false },
+    phone: { type: String, trim: true },
+    googleId: { type: String, sparse: true },
     role: {
       type: String,
       enum: ["donor", "patient", "admin"],
