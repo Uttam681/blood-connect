@@ -1,4 +1,5 @@
 const Donor = require("../models/Donor");
+const Match = require("../models/Match");
 const Request = require("../models/Request");
 
 // GET /api/donors?bloodGroup=O+&lat=..&lng=..&radiusKm=10&available=true
@@ -164,9 +165,38 @@ const getNearbyRequests = async (req, res, next) => {
   }
 };
 
+// GET /api/donors/me  (donor only)
+const getMyProfile = async (req, res, next) => {
+  try {
+    const donor = await Donor.findOne({ userId: req.user._id });
+    if (!donor) return res.status(404).json({ success: false, message: "Donor profile not found" });
+    res.json({ success: true, donor });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// GET /api/donors/me/responses  (donor only) — match history
+const getMyResponses = async (req, res, next) => {
+  try {
+    const donor = await Donor.findOne({ userId: req.user._id });
+    if (!donor) return res.status(404).json({ success: false, message: "Donor profile not found" });
+
+    const responses = await Match.find({ donorId: donor._id })
+      .populate("requestId")
+      .sort({ updatedAt: -1 });
+
+    res.json({ success: true, count: responses.length, responses });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   getDonors,
   getDonorById,
+  getMyProfile,
+  getMyResponses,
   updateAvailability,
   updateMyProfile,
   getNearbyRequests,

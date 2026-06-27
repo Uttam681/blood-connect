@@ -224,7 +224,122 @@ validation rejects invalid values at the model layer before they hit the DB.
 
 ---
 
-## 7. Possible "What would you improve?" Answers
+## 7. Google OAuth Implementation
+
+### Q: How did you implement Google OAuth?
+**A:** Used `passport-google-oauth20` strategy with `passReqToCallback: true`. The
+strategy receives the Google profile and runs a **find-or-create** pattern:
+
+```js
+let user = await User.findOne({ $or: [{ googleId: profile.id }, { email }] });
+if (user) {
+  if (!user.googleId) { user.googleId = profile.id; await user.save(); }
+  return done(null, { user, isNew: false });
+}
+user = await User.create({ name: profile.displayName, email, googleId: profile.id, role: "patient" });
+await Patient.create({ userId: user._id });
+return done(null, { user, isNew: true });
+```
+
+- Looks up by `googleId` OR `email` — so if a user registered with email/password and
+  then signs in with Google using the same email, we **link the accounts** (attach the
+  `googleId`) rather than creating a duplicate.
+- First-time Google users automatically get a `patient` role and an empty Patient profile.
+
+### Q: Why `sparse: true` on the `googleId` index?
+**A:** A unique index on `googleId` would fail when multiple documents have `googleId: null`
+(all email/password users). A **sparse index** only indexes documents where the field exists,
+so null values are excluded — allowing unlimited email/password users while still
+enforcing uniqueness across Google-linked accounts.
+
+### Q: How is the JWT handed off after OAuth?
+**A:** Google's callback goes to `GET /api/auth/google/callback`. The `googleCallback`
+controller generates a JWT and redirects the browser to:
+```
+http://localhost:5173/oauth/callback?token=JWT&name=...&role=...&isNew=...
+```
+The React `OAuthCallback.jsx` reads the query params, calls `loginWithToken()` on
+`AuthContext` (saves token to localStorage, sets user state), then navigates to
+`/admin` or `/dashboard` based on role.
+
+### Q: What happens if a Google-only user tries to log in with email/password?
+**A:** The Passport local strategy checks `if (!user.password)` and returns a clear
+message: *"This account uses Google sign-in. Please use 'Continue with Google'."*
+This prevents confusing "Invalid credentials" errors.
+
+---
+
+## 8. Admin Dashboard & Aggregation Stats
+
+### Q: How do the stats cards work?
+**A:** `GET /api/admin/stats` runs **three parallel aggregations** with `Promise.all`:
+```js
+const [usersByRole, requestsByStatus, donorsByBloodGroup] = await Promise.all([
+  User.aggregate([{ $group: { _id: "$role", count: { $sum: 1 } } }]),
+  Request.aggregate([{ $group: { _id: "$status", count: { $sum: 1 } } }]),
+  Donor.aggregate([{ $group: { _id: "$bloodGroup", count: { $sum: 1 } } }, { $sort: { _id: 1 } }]),
+]);
+```
+The frontend derives "Total Donors", "Total Patients", "Open Requests", "Fulfilled" by
+looking up the relevant `_id` in each result array. Running all three in parallel keeps
+the endpoint fast (one network round-trip, three concurrent DB ops).
+
+### Q: How does cascade delete work?
+**A:** `DELETE /api/admin/users/:id` checks the user's role, then:
+- **Donor**: deletes `Donor` profile + all `Match` records where `donorId` matches
+- **Patient**: deletes `Patient` profile + all `Request` docs + all `Match` docs for those requests
+- Finally deletes the `User` doc itself
+This prevents orphaned documents and referential inconsistency without relying on
+MongoDB transactions (which would require a replica set).
+
+### Q: What is the admin Re-run Matching for?
+**A:** When a request was created and initially found zero donors (or only donors who
+declined), the patient or admin can trigger `POST /api/admin/requests/:id/rematch`.
+It validates the request is still `"open"`, then calls the same `findAndRecordMatches`
+service used during request creation — with a wider 30 km radius. This is useful when
+new donors register after the request was posted.
+
+---
+
+## 9. Donor Dashboard — New Features
+
+### Q: How does the "Already Responded" badge work?
+**A:** On dashboard load, `GET /donors/me/responses` returns all the donor's `Match`
+records. The frontend builds a `{ requestId → donorResponse }` map from this list.
+When rendering the Nearby Requests tab, each request card checks this map — if a match
+exists for that `requestId`, it shows the badge and hides the Accept/Decline buttons.
+No extra DB query per card; it's all derived from the single response-history fetch.
+
+### Q: How does Edit Profile re-geocode the location?
+**A:** The Edit Profile form collects hospital/bank name + address + city + state, joins
+them with commas, calls `geocodeAddress()` (Nominatim, India-scoped), and gets back
+`{coordinates, displayName}`. The `PATCH /api/donors/me` handler receives `coordinates`
+and rebuilds the GeoJSON: `location: { type: "Point", coordinates }`. MongoDB
+automatically updates the `2dsphere` index on write.
+
+---
+
+## 10. Patient Dashboard — New Features
+
+### Q: How does the Re-match button work?
+**A:** `POST /api/requests/:id/rematch` (patient-only). The controller:
+1. Verifies the request belongs to this patient (`patientId` check)
+2. Confirms status is `"open"` (fulfilled/cancelled requests can't be re-matched)
+3. Calls `findAndRecordMatches(request, radiusKm)` — same service as request creation
+4. Returns `{ newMatchesFound }` count
+
+The frontend shows the count in a success toast. Useful when the first match radius was
+too small or all initial donors declined.
+
+### Q: How does the status filter work on the frontend?
+**A:** `GET /requests/me` fetches all requests once. The status filter pills
+(All / Open / Matched / Fulfilled / Cancelled) are client-side — they just filter
+the already-loaded `requests` array by `r.status`. No extra API calls on tab switch,
+which keeps it snappy.
+
+---
+
+## 11. Possible "What would you improve?" Answers
 
 - Add `express-validator` validation chains on all POST/PATCH bodies (currently manual checks).
 - Add refresh tokens / token blacklist for logout.
@@ -233,3 +348,7 @@ validation rejects invalid values at the model layer before they hit the DB.
 - Add OTP verification on registration.
 - Move from local MongoDB to Atlas with proper connection pooling for production.
 - Add unit/integration tests (Jest + Supertest + mongodb-memory-server).
+- Use MongoDB transactions for cascade delete (currently sequential async ops — a crash
+  mid-delete could leave orphaned documents; transactions + replica set would make it atomic).
+- Add a Redis cache for `GET /admin/stats` (recomputed from scratch on every request;
+  fine for low traffic, but would benefit from a short TTL cache under load).

@@ -108,12 +108,62 @@ const deleteUser = async (req, res, next) => {
   }
 };
 
+// PATCH /api/admin/users/:id/verify
+const toggleUserVerified = async (req, res, next) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+    user.isVerified = !user.isVerified;
+    await user.save();
+    res.json({ success: true, user });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// POST /api/admin/requests/:id/rematch
+const adminRematch = async (req, res, next) => {
+  try {
+    const { findAndRecordMatches } = require("../services/matching.service");
+    const request = await Request.findById(req.params.id);
+    if (!request) return res.status(404).json({ success: false, message: "Request not found" });
+    if (request.status !== "open") {
+      return res.status(400).json({ success: false, message: "Only open requests can be re-matched" });
+    }
+    const matches = await findAndRecordMatches(request, 30);
+    if (matches.length > 0) {
+      request.status = "matched";
+      await request.save();
+    }
+    res.json({ success: true, matchesFound: matches.length, request });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// GET /api/admin/stats
+const getStats = async (req, res, next) => {
+  try {
+    const [usersByRole, requestsByStatus, donorsByBloodGroup] = await Promise.all([
+      User.aggregate([{ $group: { _id: "$role", count: { $sum: 1 } } }]),
+      Request.aggregate([{ $group: { _id: "$status", count: { $sum: 1 } } }]),
+      Donor.aggregate([{ $group: { _id: "$bloodGroup", count: { $sum: 1 } } }, { $sort: { _id: 1 } }]),
+    ]);
+    res.json({ success: true, usersByRole, requestsByStatus, donorsByBloodGroup });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   getAllUsers,
   getAllDonors,
   getAllPatients,
   getAllRequests,
   toggleDonorAvailability,
+  toggleUserVerified,
   updateUserRole,
   deleteUser,
+  adminRematch,
+  getStats,
 };

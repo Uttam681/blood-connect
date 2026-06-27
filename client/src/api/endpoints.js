@@ -8,6 +8,8 @@ export const getMe = () => api.get("/auth/me");
 // Donors
 export const getDonors = (params) => api.get("/donors", { params });
 export const getDonorById = (id) => api.get(`/donors/${id}`);
+export const getMyDonorProfile = () => api.get("/donors/me");
+export const getMyResponses = () => api.get("/donors/me/responses");
 export const updateAvailability = (isAvailable) =>
   api.patch("/donors/me/availability", { isAvailable });
 export const updateDonorProfile = (data) => api.patch("/donors/me", data);
@@ -23,8 +25,11 @@ export const adminGetUsers = () => api.get("/admin/users");
 export const adminGetDonors = () => api.get("/admin/donors");
 export const adminGetPatients = () => api.get("/admin/patients");
 export const adminGetRequests = () => api.get("/admin/requests");
+export const adminGetStats = () => api.get("/admin/stats");
 export const adminToggleDonorAvailability = (id) => api.patch(`/admin/donors/${id}/availability`);
 export const adminUpdateUserRole = (id, role) => api.patch(`/admin/users/${id}/role`, { role });
+export const adminToggleVerified = (id) => api.patch(`/admin/users/${id}/verify`);
+export const adminRematch = (id) => api.post(`/admin/requests/${id}/rematch`);
 export const adminDeleteUser = (id) => api.delete(`/admin/users/${id}`);
 
 // Requests
@@ -35,3 +40,5 @@ export const updateRequestStatus = (id, status) =>
   api.patch(`/requests/${id}/status`, { status });
 export const respondToMatch = (id, response) =>
   api.post(`/requests/${id}/respond`, { response });
+export const rematchRequest = (id, radiusKm) =>
+  api.post(`/requests/${id}/rematch`, { radiusKm });

@@ -6,8 +6,11 @@ const {
   getAllPatients,
   getAllRequests,
   toggleDonorAvailability,
+  toggleUserVerified,
   updateUserRole,
   deleteUser,
+  adminRematch,
+  getStats,
 } = require("../controllers/admin.controller");
 
 const router = express.Router();
@@ -20,8 +23,11 @@ router.get("/donors", getAllDonors);
 router.get("/patients", getAllPatients);
 router.get("/requests", getAllRequests);
 
+router.get("/stats", getStats);
 router.patch("/donors/:id/availability", toggleDonorAvailability);
 router.patch("/users/:id/role", updateUserRole);
+router.patch("/users/:id/verify", toggleUserVerified);
+router.post("/requests/:id/rematch", adminRematch);
 router.delete("/users/:id", deleteUser);
 
 module.exports = router;

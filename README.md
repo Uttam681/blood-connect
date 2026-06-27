@@ -48,28 +48,34 @@ unreliable. **BloodConnect** solves this by letting:
 
 ### For Donors
 - Register with blood group, hospital/blood bank location (auto-geocoded from address)
-- Toggle availability (`Available` / `Not Available`)
-- View incoming blood requests near them, sorted by distance
-- Accept or decline a match request
+- Toggle availability (`Available` / `Not Available`) directly from the dashboard header
+- **Nearby Requests tab** — view blood requests within 25 km, filtered by urgency (All / Critical / High / Medium / Low)
+- "Already Responded" badge on requests already acted on; Accept / Decline buttons for new ones
+- **My Responses tab** — full response history: each match with your response badge, request status badge, distance, and response date
+- **Edit Profile tab** — update blood group, hospital/bank, address, city, state, pincode, last donation date (re-geocodes location on save)
 
 ### For Patients
-- Register with email/password **or sign in with Google** (one click)
-- Register with profile details (age, gender, city)
+- Register with email/password **or sign in with Google** (one click, creates patient account automatically)
+- Profile details: age, gender, default city — editable any time via collapsible Edit Profile section
 - Search donors by blood group + location, in **list** or **interactive map** view
 - Raise an urgent blood request (blood group, units needed, urgency level, hospital)
-- Hospital name auto-appended with city to prevent wrong-city geocoding
+- Hospital name auto-appended with default city to prevent wrong-city geocoding
 - Confirm geocoded location before submitting (prevents ambiguous results)
 - Automatically matched with nearby available donors via geospatial query
+- **Status filter tabs** on My Requests: All / Open / Matched / Fulfilled / Cancelled
+- **Re-match button** on open requests — re-runs geo matching with 30 km radius to find new donors
 - Track request status (`open` → `matched` → `fulfilled` / `cancelled`)
-- View matched donor details + "View on Map"
+- View matched donor details with distance, contact, response status, and "View on Map"
 
 ### For Admins
-- Dedicated **Admin Dashboard** with 3 tabs: Users, Donors, Requests
-- View all registered users with name, email, phone, role, join date
-- Change any user's role inline (donor / patient / admin)
-- Delete any user and cascade-delete all their associated data
-- Toggle any donor's availability directly
-- View all blood requests across the platform with status
+- Dedicated **Admin Dashboard** with stats cards, blood-group breakdown, and 3 tabs
+- **Stats row**: Total Donors, Total Patients, Open Requests, Fulfilled — from live aggregation
+- **Blood Group breakdown** — donor count per blood group across the platform
+- **Search bar** in every tab (name, email, blood group, hospital — client-side instant filter)
+- **Users tab**: all users with role dropdown (change inline), Verified/Unverified toggle, join date, delete
+- **Donors tab**: blood group badge, hospital, city, availability toggle
+- **Requests tab**: patient name+email, blood group, urgency badge, status badge, **Re-run Matching** button on open requests
+- Delete any user and cascade-delete all their associated data (profile + requests + matches)
 
 ### Platform
 - JWT-based authentication with role-based access control (donor / patient / admin)
@@ -110,23 +116,30 @@ flowchart TD
     subgraph DONOR [" 🩺  Donor "]
         DD([Donor Dashboard])
         DD --> DA[Toggle Availability\nAvailable / Unavailable]
-        DD --> DN[View Nearby Requests\nFiltered by blood group + geo]
-        DN --> RESP{Respond}
+        DD --> TAB1[Nearby Requests Tab\nUrgency filter: All·Critical·High·Medium·Low]
+        TAB1 --> RESP{Respond}
         RESP -->|Accept| ACC[✅ Accepted\ndistance + contact shown to patient]
         RESP -->|Decline| DEC[❌ Declined]
+        RESP -->|Already responded| BADGE[Already Responded badge]
+        DD --> TAB2[My Responses Tab\nHistory: response + request status + date]
+        DD --> TAB3[Edit Profile Tab\nBlood group · hospital · city · last donation]
     end
 
     %% ─── PATIENT FLOW ──────────────────────────────────────────
     subgraph PATIENT [" 🏥  Patient "]
         PD([Patient Dashboard])
+        PD --> EP[Edit Profile\nAge · Gender · Default City]
         PD --> RF[Raise Blood Request\nBlood Group · Units · Urgency · Hospital]
         RF --> GEO[Geocode Hospital Address\ncity auto-appended · confirm location]
         GEO --> MATCH{Geo-Match\n$geoNear within radius}
         MATCH -->|Donor found| MS[Status: Matched\nView donors · distance · contact]
-        MATCH -->|No donor| OS[Status: Open\nWiden radius or wait]
+        MATCH -->|No donor| OS[Status: Open]
+        OS --> RM[Re-match button\nExpand radius · find new donors]
+        RM --> MATCH
         MS --> ACT{Update Request}
         ACT --> FUL[Mark Fulfilled]
         ACT --> CAN[Cancel]
+        PD --> SF[Status Filter\nAll·Open·Matched·Fulfilled·Cancelled]
         PD --> SD[Search Donors\nBlood Group + Location]
         SD --> LM{View Mode}
         LM --> LIST[📋 List View\nCards with distance]
@@ -138,12 +151,17 @@ flowchart TD
     %% ─── ADMIN FLOW ────────────────────────────────────────────
     subgraph ADMIN [" 🔐  Admin "]
         AD([Admin Dashboard])
-        AD --> UT[Users Tab\nAll users · role badges]
+        AD --> STATS[Stats Cards\nDonors · Patients · Open · Fulfilled]
+        AD --> BG[Blood Group Breakdown\nDonor count per group]
+        AD --> SRCH[Search Bar\nFilter any tab by name·email·blood group]
+        AD --> UT[Users Tab]
         UT --> CR[Change Role\ndonor / patient / admin]
+        UT --> VER[Toggle Verified\nVerified / Unverified]
         UT --> DEL[Delete User\nCascades: profile + requests + matches]
-        AD --> DT[Donors Tab\nBlood group · hospital · city]
+        AD --> DT[Donors Tab]
         DT --> TOG[Toggle Availability\nOverride donor status]
-        AD --> RT[Requests Tab\nAll requests · status · patient info]
+        AD --> RT[Requests Tab]
+        RT --> RRM[Re-run Matching\nOpen requests only · finds new donors]
     end
 
     LOGIN -->|role = admin| AD
@@ -189,9 +207,9 @@ BloodConnect/
 │   │   │   ├── Register.jsx        # Role selector + Google OAuth button (patient)
 │   │   │   ├── OAuthCallback.jsx   # Handles ?token= redirect after Google auth
 │   │   │   ├── Dashboard.jsx       # Routes to Donor/Patient/Admin dashboard by role
-│   │   │   ├── AdminDashboard.jsx  # Users · Donors · Requests tabs
-│   │   │   ├── DonorDashboard.jsx  # Availability toggle + nearby requests
-│   │   │   ├── PatientDashboard.jsx# Create requests + my requests
+│   │   │   ├── AdminDashboard.jsx  # Stats cards · search · Users · Donors · Requests tabs
+│   │   │   ├── DonorDashboard.jsx  # Nearby Requests · My Responses · Edit Profile tabs
+│   │   │   ├── PatientDashboard.jsx# Edit Profile · Create Request · My Requests (status filter + re-match)
 │   │   │   ├── DonorList.jsx       # Search donors (list/map)
 │   │   │   ├── DonorDetails.jsx    # Donor profile + map pin
 │   │   │   └── RequestDetails.jsx  # Request + matched donors
@@ -211,16 +229,16 @@ BloodConnect/
 │   │   └── Match.js
 │   ├── controllers/
 │   │   ├── auth.controller.js      # register · login · getMe · googleCallback
-│   │   ├── admin.controller.js     # CRUD for users, donors, requests (admin only)
-│   │   ├── donor.controller.js
+│   │   ├── admin.controller.js     # getStats · CRUD users/donors/requests · adminRematch · toggleVerified
+│   │   ├── donor.controller.js     # getMyProfile · getMyResponses · updateMyProfile · getNearbyRequests
 │   │   ├── patient.controller.js
-│   │   └── request.controller.js
+│   │   └── request.controller.js   # createRequest · getMyRequests · rematchRequest · respondToMatch
 │   ├── routes/
 │   │   ├── auth.routes.js          # /register · /login · /me · /google · /google/callback
 │   │   ├── admin.routes.js         # All routes protected: protect + authorize("admin")
-│   │   ├── donor.routes.js
+│   │   ├── donor.routes.js         # /me · /me/responses · /me/availability · /requests/nearby
 │   │   ├── patient.routes.js
-│   │   └── request.routes.js
+│   │   └── request.routes.js       # POST /:id/rematch · POST /:id/respond
 │   ├── middleware/
 │   │   ├── auth.js                 # protect (JWT) + authorize (RBAC)
 │   │   └── errorHandler.js
@@ -321,6 +339,8 @@ Base URL: `/api`
 | GET    | `/:id`                    | —             | Donor details |
 | PATCH  | `/me/availability`        | JWT (donor)   | Toggle `isAvailable` |
 | PATCH  | `/me`                     | JWT (donor)   | Update donor profile/location |
+| GET    | `/me`                     | JWT (donor)   | Own donor profile |
+| GET    | `/me/responses`           | JWT (donor)   | Response history (all matches for this donor) |
 | GET    | `/requests/nearby`        | JWT (donor)   | Blood requests near this donor |
 
 ### Patients (`/api/patients`)
@@ -337,16 +357,20 @@ Base URL: `/api`
 | GET    | `/:id`              | JWT           | Request details + matched donors |
 | PATCH  | `/:id/status`       | JWT (patient) | Update status (`fulfilled`/`cancelled`) |
 | POST   | `/:id/respond`      | JWT (donor)   | Accept/decline a match |
+| POST   | `/:id/rematch`      | JWT (patient) | Re-run geo matching on an open request |
 
 ### Admin (`/api/admin`) — JWT + admin role required
 | Method | Endpoint                       | Description |
 |--------|--------------------------------|-------------|
+| GET    | `/stats`                       | Live aggregation: users by role, requests by status, donors by blood group |
 | GET    | `/users`                       | List all users |
 | GET    | `/donors`                      | List all donor profiles |
 | GET    | `/patients`                    | List all patient profiles |
 | GET    | `/requests`                    | List all blood requests |
 | PATCH  | `/users/:id/role`              | Change a user's role |
+| PATCH  | `/users/:id/verify`            | Toggle user's `isVerified` flag |
 | PATCH  | `/donors/:id/availability`     | Toggle donor availability |
+| POST   | `/requests/:id/rematch`        | Re-run geo matching on an open request |
 | DELETE | `/users/:id`                   | Delete user + cascade all associated data |
 
 ---
@@ -473,18 +497,21 @@ const bcrypt = require('bcryptjs');
 1. **Register** as a Donor (blood group + hospital address — auto-geocoded) or as a
    Patient (age, gender, city) — or click **Continue with Google** for a one-click
    patient account.
-2. **Donors** land on their dashboard: toggle availability and view nearby blood
-   requests matching their blood group, with the option to Accept / Decline.
-3. **Patients** land on their dashboard: fill the "Raise a Blood Request" form
-   (blood group, units, urgency, hospital name). The hospital is geocoded and the
-   resolved address shown for confirmation before the request is submitted. The backend
-   runs a `$geoNear` query and immediately reports how many donors matched.
-4. From "My Requests", patients open **Request Details** to see matched donors, their
-   distance, contact info, and a **"View on Map"** link.
-5. Anyone (logged in or not) can use **Find Donors** to search by blood group and
-   location, switching between card **list view** and interactive **Leaflet map**.
-6. **Admins** log in to the **Admin Dashboard** to manage users (change roles, delete
-   accounts), toggle donor availability, and monitor all blood requests platform-wide.
+2. **Donors** land on a three-tab dashboard:
+   - **Nearby Requests** — filter by urgency, see "Already Responded" badge, accept or decline
+   - **My Responses** — full history of every match with response badge and request status
+   - **Edit Profile** — update blood group, location, last donation date
+3. **Patients** land on their dashboard:
+   - **Edit Profile** (collapsible) — update age, gender, default city
+   - **Raise a Blood Request** — hospital is geocoded (city auto-appended), resolved address confirmed before submit; backend runs `$geoNear` and reports match count
+   - **My Requests** — filter by status (All / Open / Matched / Fulfilled / Cancelled), re-match open requests, mark fulfilled or cancel
+4. From **My Requests**, patients open **Request Details** to see matched donors, their distance, contact info, and response status (pending/accepted/declined), plus a **"View on Map"** link.
+5. Anyone (logged in or not) can use **Find Donors** to search by blood group and location, switching between card **list view** and interactive **Leaflet map**.
+6. **Admins** log in to the **Admin Dashboard**:
+   - Stats cards and blood-group breakdown at the top
+   - Search bar filtering any tab instantly
+   - Change user roles, toggle verified status, delete users with cascade
+   - Toggle donor availability, re-run matching on open requests
 
 ---
 
@@ -494,7 +521,11 @@ const bcrypt = require('bcryptjs');
 - [ ] SMS / Email notifications to matched donors (Twilio + Nodemailer)
 - [ ] Push notifications (Firebase)
 - [x] Admin role + moderation dashboard
+- [x] Admin stats cards + blood group breakdown
+- [x] Admin search, verified toggle, re-run matching
 - [x] Google OAuth sign-in / sign-up
+- [x] Donor — urgency filter, already-responded badge, response history tab, edit profile tab
+- [x] Patient — status filter, re-match button, edit profile section
 - [ ] Request expiry automation (scheduled job / TTL handling)
 - [ ] Pagination on donor/request lists
 - [ ] Automated tests (Jest + Supertest + mongodb-memory-server)

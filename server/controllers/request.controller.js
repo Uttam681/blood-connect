@@ -153,10 +153,32 @@ const respondToMatch = async (req, res, next) => {
   }
 };
 
+// POST /api/requests/:id/rematch  (patient only — re-run matching on an open request)
+const rematchRequest = async (req, res, next) => {
+  try {
+    const patient = await Patient.findOne({ userId: req.user._id });
+    const request = await Request.findOne({ _id: req.params.id, patientId: patient?._id });
+    if (!request) return res.status(404).json({ success: false, message: "Request not found" });
+    if (request.status !== "open") {
+      return res.status(400).json({ success: false, message: "Only open requests can be re-matched" });
+    }
+    const { radiusKm } = req.body;
+    const matches = await findAndRecordMatches(request, radiusKm);
+    if (matches.length > 0) {
+      request.status = "matched";
+      await request.save();
+    }
+    res.json({ success: true, matchesFound: matches.length, request });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   createRequest,
   getMyRequests,
   getRequestById,
   updateRequestStatus,
   respondToMatch,
+  rematchRequest,
 };
