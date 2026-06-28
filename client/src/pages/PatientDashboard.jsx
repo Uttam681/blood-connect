@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   createRequest,
@@ -7,14 +7,17 @@ import {
   getMyRequests,
   updateRequestStatus,
   rematchRequest,
+  searchHospitals,
+  submitHospital,
 } from "../api/endpoints";
 import { geocodeAddress } from "../utils/geocode";
 
 const BLOOD_GROUPS = ["A+", "A-", "B+", "B-", "O+", "O-", "AB+", "AB-"];
 const URGENCY_LEVELS = ["low", "medium", "high", "critical"];
-const STATUS_FILTERS = ["all", "open", "matched", "fulfilled", "cancelled"];
+const STATUS_FILTERS = ["all", "pending_verification", "open", "matched", "fulfilled", "cancelled"];
 
 const STATUS_COLORS = {
+  pending_verification: "bg-orange-100 text-orange-700",
   open: "bg-yellow-100 text-yellow-700",
   matched: "bg-blue-100 text-blue-700",
   fulfilled: "bg-green-100 text-green-700",
@@ -28,6 +31,8 @@ const URGENCY_COLORS = {
   high: "bg-orange-100 text-orange-700",
   critical: "bg-red-100 text-red-700",
 };
+
+const formatStatus = (s) => s.replace(/_/g, " ");
 
 export default function PatientDashboard() {
   const [requests, setRequests] = useState([]);
@@ -46,10 +51,21 @@ export default function PatientDashboard() {
     bloodGroup: "O+",
     unitsNeeded: 1,
     urgency: "medium",
-    hospitalName: "",
     description: "",
     radiusKm: 15,
   });
+
+  // Hospital picker state
+  const [hospitalQuery, setHospitalQuery] = useState("");
+  const [hospitalResults, setHospitalResults] = useState([]);
+  const [searchingHospitals, setSearchingHospitals] = useState(false);
+  const [selectedHospital, setSelectedHospital] = useState(null);
+  const [showNewHospitalForm, setShowNewHospitalForm] = useState(false);
+  const [submittingHospital, setSubmittingHospital] = useState(false);
+  const [newHospital, setNewHospital] = useState({
+    name: "", address: "", city: "", state: "", pincode: "", contactPhone: "",
+  });
+  const searchDebounce = useRef(null);
 
   const loadRequests = async () => {
     setLoading(true);
@@ -81,34 +97,100 @@ export default function PatientDashboard() {
     loadProfile();
   }, []);
 
+  // Debounced hospital search as the patient types
+  useEffect(() => {
+    if (selectedHospital) return; // don't re-search once a hospital is picked
+    if (searchDebounce.current) clearTimeout(searchDebounce.current);
+    if (!hospitalQuery.trim()) { setHospitalResults([]); return; }
+    searchDebounce.current = setTimeout(async () => {
+      setSearchingHospitals(true);
+      try {
+        const res = await searchHospitals(hospitalQuery.trim());
+        setHospitalResults(res.data.hospitals);
+      } catch {
+        setHospitalResults([]);
+      } finally {
+        setSearchingHospitals(false);
+      }
+    }, 350);
+    return () => clearTimeout(searchDebounce.current);
+  }, [hospitalQuery, selectedHospital]);
+
   const handleChange = (e) => setForm({ ...form, [e.target.name]: e.target.value });
+
+  const handleSelectHospital = (hospital) => {
+    setSelectedHospital(hospital);
+    setHospitalQuery("");
+    setHospitalResults([]);
+    setShowNewHospitalForm(false);
+  };
+
+  const handleClearHospital = () => {
+    setSelectedHospital(null);
+    setHospitalQuery("");
+  };
+
+  const handleOpenNewHospitalForm = () => {
+    setShowNewHospitalForm(true);
+    setNewHospital({ ...newHospital, city: newHospital.city || defaultCity });
+  };
+
+  const handleSubmitNewHospital = async (e) => {
+    e.preventDefault();
+    setError(""); setSubmittingHospital(true);
+    try {
+      const addressQuery = [newHospital.name, newHospital.address, newHospital.city, newHospital.state]
+        .filter(Boolean)
+        .join(", ");
+      const { coordinates, displayName } = await geocodeAddress(addressQuery);
+      const proceed = window.confirm(
+        `Resolved location:\n${displayName}\n\nSubmit this hospital for admin verification?`
+      );
+      if (!proceed) { setSubmittingHospital(false); return; }
+
+      const res = await submitHospital({ ...newHospital, coordinates });
+      handleSelectHospital(res.data.hospital);
+      setShowNewHospitalForm(false);
+    } catch (err) {
+      setError(err.response?.data?.message || err.message || "Failed to submit hospital");
+    } finally {
+      setSubmittingHospital(false);
+    }
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setError(""); setSuccess(""); setSubmitting(true);
-    try {
-      const query =
-        defaultCity && !form.hospitalName.toLowerCase().includes(defaultCity.toLowerCase())
-          ? `${form.hospitalName}, ${defaultCity}`
-          : form.hospitalName;
+    setError(""); setSuccess("");
 
-      const { coordinates, displayName } = await geocodeAddress(query);
+    if (!selectedHospital) {
+      setError("Please select or submit a hospital/blood bank for this request.");
+      return;
+    }
+
+    if (selectedHospital.status !== "verified") {
       const proceed = window.confirm(
-        `Resolved location:\n${displayName}\n\nUse this location for your request?`
+        `"${selectedHospital.name}" is still pending admin verification. Your request will be created but won't be visible to donors until it's verified. Continue?`
       );
-      if (!proceed) { setSubmitting(false); return; }
+      if (!proceed) return;
+    }
 
+    setSubmitting(true);
+    try {
       const res = await createRequest({
         bloodGroup: form.bloodGroup,
         unitsNeeded: Number(form.unitsNeeded),
         urgency: form.urgency,
-        hospitalName: form.hospitalName,
+        hospitalId: selectedHospital._id,
         description: form.description,
-        coordinates,
         radiusKm: Number(form.radiusKm),
       });
-      setSuccess(`Request created! Found ${res.data.matchesFound} matching donor(s) nearby.`);
-      setForm({ ...form, hospitalName: "", description: "" });
+      setSuccess(
+        res.data.hospitalStatus === "verified"
+          ? `Request created! Found ${res.data.matchesFound} matching donor(s) nearby.`
+          : "Request created — it will go live once the hospital is verified by an admin."
+      );
+      setForm({ ...form, description: "" });
+      handleClearHospital();
       loadRequests();
     } catch (err) {
       setError(err.response?.data?.message || err.message || "Failed to create request");
@@ -131,7 +213,7 @@ export default function PatientDashboard() {
     setError(""); setSuccess(""); setRematching(id);
     try {
       const res = await rematchRequest(id, 30);
-      setSuccess(`Re-match complete — found ${res.data.newMatchesFound ?? 0} new donor(s).`);
+      setSuccess(`Re-match complete — found ${res.data.matchesFound ?? 0} donor(s) nearby.`);
       loadRequests();
     } catch (err) {
       setError(err.response?.data?.message || "Re-match failed");
@@ -260,14 +342,142 @@ export default function PatientDashboard() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Hospital Name / Location</label>
-              <input
-                name="hospitalName" required value={form.hospitalName} onChange={handleChange}
-                placeholder="e.g. Apollo Hospital, Hyderabad"
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand"
-              />
-              <p className="text-xs text-gray-400 mt-1">Used to locate nearby donors automatically.</p>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Hospital / Blood Bank</label>
+
+              {selectedHospital ? (
+                <div className="flex items-center justify-between border border-gray-300 rounded-lg px-3 py-2 bg-gray-50">
+                  <div>
+                    <span className="font-medium text-gray-800">{selectedHospital.name}</span>
+                    {selectedHospital.city && (
+                      <span className="text-gray-500 text-sm"> · {selectedHospital.city}</span>
+                    )}
+                    <div className="mt-0.5">
+                      {selectedHospital.status === "verified" ? (
+                        <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-700">
+                          Verified {selectedHospital.registrationCode && `· ${selectedHospital.registrationCode}`}
+                        </span>
+                      ) : (
+                        <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700">
+                          Pending admin verification
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleClearHospital}
+                    className="text-gray-400 hover:text-gray-600 text-sm font-medium"
+                  >
+                    Change
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <input
+                    value={hospitalQuery}
+                    onChange={(e) => setHospitalQuery(e.target.value)}
+                    placeholder="Search verified hospitals by name or city..."
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand"
+                  />
+                  {searchingHospitals && (
+                    <p className="text-xs text-gray-400 mt-1">Searching...</p>
+                  )}
+                  {hospitalResults.length > 0 && (
+                    <div className="border border-gray-200 rounded-lg mt-1 divide-y divide-gray-100 max-h-44 overflow-y-auto">
+                      {hospitalResults.map((h) => (
+                        <button
+                          key={h._id}
+                          type="button"
+                          onClick={() => handleSelectHospital(h)}
+                          className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 flex items-center justify-between"
+                        >
+                          <span>{h.name} <span className="text-gray-400">· {h.city}</span></span>
+                          <span className="text-xs text-green-600 font-medium">✓ Verified</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {hospitalQuery && !searchingHospitals && hospitalResults.length === 0 && (
+                    <p className="text-xs text-gray-400 mt-1">No verified hospital found.</p>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleOpenNewHospitalForm}
+                    className="text-brand text-xs font-medium hover:underline mt-1"
+                  >
+                    Can't find your hospital? Submit it for verification
+                  </button>
+                </>
+              )}
+
+              <p className="text-xs text-gray-400 mt-1">
+                Requests are tied to a verified hospital to prevent fraudulent or
+                trafficking-related blood requests.
+              </p>
             </div>
+
+            {showNewHospitalForm && !selectedHospital && (
+              <div className="border border-gray-200 rounded-lg p-4 space-y-3 bg-gray-50">
+                <p className="text-sm font-medium text-gray-700">Submit a new hospital / blood bank</p>
+                <input
+                  required
+                  value={newHospital.name}
+                  onChange={(e) => setNewHospital({ ...newHospital, name: e.target.value })}
+                  placeholder="Hospital / blood bank name"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
+                />
+                <input
+                  value={newHospital.address}
+                  onChange={(e) => setNewHospital({ ...newHospital, address: e.target.value })}
+                  placeholder="Street / area"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
+                />
+                <div className="grid grid-cols-3 gap-2">
+                  <input
+                    required
+                    value={newHospital.city}
+                    onChange={(e) => setNewHospital({ ...newHospital, city: e.target.value })}
+                    placeholder="City"
+                    className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
+                  />
+                  <input
+                    value={newHospital.state}
+                    onChange={(e) => setNewHospital({ ...newHospital, state: e.target.value })}
+                    placeholder="State"
+                    className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
+                  />
+                  <input
+                    value={newHospital.pincode}
+                    onChange={(e) => setNewHospital({ ...newHospital, pincode: e.target.value })}
+                    placeholder="Pincode"
+                    className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
+                  />
+                </div>
+                <input
+                  value={newHospital.contactPhone}
+                  onChange={(e) => setNewHospital({ ...newHospital, contactPhone: e.target.value })}
+                  placeholder="Hospital contact phone (optional)"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
+                />
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={handleSubmitNewHospital}
+                    disabled={submittingHospital}
+                    className="bg-brand text-white text-sm font-medium px-4 py-2 rounded-lg hover:bg-brand-dark transition disabled:opacity-60"
+                  >
+                    {submittingHospital ? "Submitting..." : "Submit for verification"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowNewHospitalForm(false)}
+                    className="text-gray-500 text-sm font-medium px-2"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
@@ -312,7 +522,7 @@ export default function PatientDashboard() {
                   statusFilter === s ? "bg-brand text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"
                 }`}
               >
-                {s}
+                {formatStatus(s)}
               </button>
             ))}
           </div>
@@ -320,7 +530,7 @@ export default function PatientDashboard() {
           {loading ? (
             <p className="text-gray-500 text-sm">Loading...</p>
           ) : filtered.length === 0 ? (
-            <p className="text-gray-500 text-sm">No {statusFilter === "all" ? "" : statusFilter + " "}requests.</p>
+            <p className="text-gray-500 text-sm">No {statusFilter === "all" ? "" : formatStatus(statusFilter) + " "}requests.</p>
           ) : (
             <div className="space-y-3">
               {filtered.map((r) => (
@@ -334,17 +544,24 @@ export default function PatientDashboard() {
                         {r.urgency}
                       </span>
                       <span className={`text-xs font-medium px-2 py-0.5 rounded-full capitalize ${STATUS_COLORS[r.status]}`}>
-                        {r.status}
+                        {formatStatus(r.status)}
                       </span>
                     </div>
                   </div>
-                  <p className="text-sm text-gray-600">{r.hospitalName}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm text-gray-600">{r.hospitalName}</p>
+                    {r.hospitalId?.status === "verified" ? (
+                      <span className="text-xs text-green-600 font-medium">✓ Verified</span>
+                    ) : r.hospitalId?.status === "pending" ? (
+                      <span className="text-xs text-yellow-600 font-medium">Pending verification</span>
+                    ) : null}
+                  </div>
                   <p className="text-xs text-gray-400">{new Date(r.createdAt).toLocaleString()}</p>
                   <div className="flex flex-wrap gap-2 mt-1">
                     <Link to={`/requests/${r._id}`} className="text-brand text-sm font-medium hover:underline">
                       View matches
                     </Link>
-                    {r.status === "open" && (
+                    {["open", "matched"].includes(r.status) && (
                       <button
                         onClick={() => handleRematch(r._id)}
                         disabled={rematching === r._id}

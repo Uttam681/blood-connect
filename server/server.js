@@ -11,6 +11,7 @@ const donorRoutes = require("./routes/donor.routes");
 const patientRoutes = require("./routes/patient.routes");
 const requestRoutes = require("./routes/request.routes");
 const adminRoutes = require("./routes/admin.routes");
+const hospitalRoutes = require("./routes/hospital.routes");
 
 connectDB();
 
@@ -28,6 +29,7 @@ app.use("/api/donors", donorRoutes);
 app.use("/api/patients", patientRoutes);
 app.use("/api/requests", requestRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/hospitals", hospitalRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ success: false, message: "Route not found" });

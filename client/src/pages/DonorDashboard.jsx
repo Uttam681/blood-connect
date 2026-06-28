@@ -4,8 +4,10 @@ import {
   getMyDonorProfile,
   getMyResponses,
   respondToMatch,
+  withdrawMatch,
   updateAvailability,
   updateDonorProfile,
+  submitMedicalDeclaration,
 } from "../api/endpoints";
 import { useAuth } from "../context/AuthContext";
 import { geocodeAddress } from "../utils/geocode";
@@ -21,7 +23,24 @@ const RESPONSE_COLORS = {
   pending: "bg-yellow-100 text-yellow-700",
   accepted: "bg-green-100 text-green-700",
   declined: "bg-gray-100 text-gray-500",
+  withdrawn: "bg-orange-100 text-orange-700",
 };
+
+const MEDICAL_STATUS_COLORS = {
+  unsubmitted: "bg-gray-100 text-gray-500",
+  pending: "bg-yellow-100 text-yellow-700",
+  cleared: "bg-green-100 text-green-700",
+  rejected: "bg-red-100 text-red-700",
+};
+
+const MEDICAL_STATUS_LABELS = {
+  unsubmitted: "Medical: Not Submitted",
+  pending: "Medical: Pending Review",
+  cleared: "Medically Cleared",
+  rejected: "Medical: Rejected",
+};
+
+const DONATION_COOLDOWN_DAYS = 90;
 
 const STATUS_COLORS = {
   open: "bg-yellow-100 text-yellow-700",
@@ -49,10 +68,17 @@ export default function DonorDashboard() {
   const [success, setSuccess] = useState("");
   const [toggling, setToggling] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [withdrawing, setWithdrawing] = useState(null); // matchId
+  const [submittingMedical, setSubmittingMedical] = useState(false);
 
   const [form, setForm] = useState({
     bloodGroup: "", hospitalOrBank: "", address: "",
     city: "", state: "", pincode: "", lastDonationDate: "",
+  });
+
+  const [medicalForm, setMedicalForm] = useState({
+    hemoglobin: "", weight: "", recentIllness: false, illnessDetails: "",
+    medications: "", reportNotes: "",
   });
 
   const load = async () => {
@@ -76,6 +102,15 @@ export default function DonorDashboard() {
         state: p.state || "",
         pincode: p.pincode || "",
         lastDonationDate: p.lastDonationDate ? p.lastDonationDate.slice(0, 10) : "",
+      });
+      const d = p.medicalDeclaration || {};
+      setMedicalForm({
+        hemoglobin: d.hemoglobin ?? "",
+        weight: d.weight ?? "",
+        recentIllness: !!d.recentIllness,
+        illnessDetails: d.illnessDetails || "",
+        medications: d.medications || "",
+        reportNotes: d.reportNotes || "",
       });
       // Pre-populate already-responded map
       const map = {};
@@ -115,6 +150,44 @@ export default function DonorDashboard() {
     }
   };
 
+  const handleWithdraw = async (matchId, requestId) => {
+    if (!window.confirm(
+      "Are you sure you can't make it? This is time-sensitive for the patient — withdrawing immediately notifies them and tries to find a backup donor."
+    )) return;
+    setError(""); setSuccess(""); setWithdrawing(matchId);
+    try {
+      const res = await withdrawMatch(requestId);
+      setSuccess(
+        res.data.backupMatchesFound > 0
+          ? `Withdrawn. ${res.data.backupMatchesFound} backup donor(s) found nearby.`
+          : "Withdrawn. No backup donor found yet — the patient's request is now open again."
+      );
+      load();
+    } catch (err) {
+      setError(err.response?.data?.message || "Failed to withdraw");
+    } finally {
+      setWithdrawing(null);
+    }
+  };
+
+  const handleSubmitMedical = async (e) => {
+    e.preventDefault();
+    setError(""); setSuccess(""); setSubmittingMedical(true);
+    try {
+      const res = await submitMedicalDeclaration({
+        ...medicalForm,
+        hemoglobin: medicalForm.hemoglobin ? Number(medicalForm.hemoglobin) : undefined,
+        weight: medicalForm.weight ? Number(medicalForm.weight) : undefined,
+      });
+      setProfile(res.data.donor);
+      setSuccess("Medical declaration submitted for review.");
+    } catch (err) {
+      setError(err.response?.data?.message || "Failed to submit medical declaration");
+    } finally {
+      setSubmittingMedical(false);
+    }
+  };
+
   const handleSaveProfile = async (e) => {
     e.preventDefault();
     setError(""); setSuccess(""); setSaving(true);
@@ -136,10 +209,17 @@ export default function DonorDashboard() {
     ? requests
     : requests.filter((r) => r.urgency === urgencyFilter);
 
+  let cooldownUntil = null;
+  if (profile?.lastDonationDate) {
+    const eligibleAgain = new Date(profile.lastDonationDate);
+    eligibleAgain.setDate(eligibleAgain.getDate() + DONATION_COOLDOWN_DAYS);
+    if (eligibleAgain > new Date()) cooldownUntil = eligibleAgain;
+  }
+
   return (
     <div className="max-w-4xl mx-auto px-4 py-8">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-2">
         <h1 className="text-2xl font-bold text-gray-800">Welcome, {user?.name}</h1>
         <button
           onClick={handleToggle}
@@ -151,6 +231,24 @@ export default function DonorDashboard() {
           {available ? "Available — tap to mark unavailable" : "Unavailable — tap to mark available"}
         </button>
       </div>
+
+      {profile && (
+        <div className="flex items-center gap-2 mb-6">
+          <span className={`text-xs font-medium px-2 py-1 rounded-full ${MEDICAL_STATUS_COLORS[profile.medicalStatus]}`}>
+            {MEDICAL_STATUS_LABELS[profile.medicalStatus]}
+          </span>
+          {profile.medicalStatus === "rejected" && profile.medicalRejectionReason && (
+            <span className="text-xs text-red-500">— {profile.medicalRejectionReason}</span>
+          )}
+        </div>
+      )}
+
+      {cooldownUntil && (
+        <div className="bg-orange-50 text-orange-700 text-sm rounded-lg px-4 py-2 mb-4">
+          You're inside the {DONATION_COOLDOWN_DAYS}-day post-donation cooldown window — you won't be matched to
+          new requests again until {cooldownUntil.toLocaleDateString()}.
+        </div>
+      )}
 
       {error && <div className="bg-red-50 text-red-600 text-sm rounded-lg px-4 py-2 mb-4">{error}</div>}
       {success && <div className="bg-green-50 text-green-700 text-sm rounded-lg px-4 py-2 mb-4">{success}</div>}
@@ -223,7 +321,12 @@ export default function DonorDashboard() {
                             )}
                           </div>
                         </div>
-                        <p className="text-sm text-gray-600">{r.hospitalName}</p>
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm text-gray-600">{r.hospitalName}</p>
+                          {r.hospitalRegistrationCode && (
+                            <span className="text-xs text-green-600 font-medium">✓ {r.hospitalRegistrationCode}</span>
+                          )}
+                        </div>
                         {r.description && <p className="text-sm text-gray-500">{r.description}</p>}
                         <p className="text-xs text-gray-400">{(r.distanceMeters / 1000).toFixed(2)} km away</p>
                         {!myResponse ? (
@@ -282,6 +385,15 @@ export default function DonorDashboard() {
                         {m.distanceKm?.toFixed(2)} km away · Responded{" "}
                         {m.respondedAt ? new Date(m.respondedAt).toLocaleDateString() : "—"}
                       </p>
+                      {m.donorResponse === "accepted" && m.requestId?.status === "matched" && (
+                        <button
+                          onClick={() => handleWithdraw(m._id, m.requestId._id)}
+                          disabled={withdrawing === m._id}
+                          className="text-orange-600 text-xs font-medium hover:underline disabled:opacity-50 text-left mt-1"
+                        >
+                          {withdrawing === m._id ? "Withdrawing..." : "Can't make it? Withdraw"}
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -361,6 +473,76 @@ export default function DonorDashboard() {
                   {saving ? "Saving..." : "Save Changes"}
                 </button>
               </form>
+
+              <div className="border-t border-gray-200 mt-8 pt-6">
+                <h2 className="text-lg font-semibold text-gray-800 mb-1">Medical Declaration</h2>
+                <p className="text-xs text-gray-400 mb-4">
+                  Submitted for review by an admin (on behalf of your city's main verifying hospital, if one is
+                  assigned). Final medical clearance always happens in person at the blood bank before donation —
+                  this just flags donors who shouldn't be matched in the meantime.
+                </p>
+                <form onSubmit={handleSubmitMedical} className="space-y-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Hemoglobin (g/dL)</label>
+                      <input
+                        type="number" step="0.1"
+                        value={medicalForm.hemoglobin}
+                        onChange={(e) => setMedicalForm({ ...medicalForm, hemoglobin: e.target.value })}
+                        placeholder="e.g. 13.5"
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Weight (kg)</label>
+                      <input
+                        type="number"
+                        value={medicalForm.weight}
+                        onChange={(e) => setMedicalForm({ ...medicalForm, weight: e.target.value })}
+                        placeholder="e.g. 65"
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand"
+                      />
+                    </div>
+                  </div>
+                  <label className="flex items-center gap-2 text-sm text-gray-700">
+                    <input
+                      type="checkbox"
+                      checked={medicalForm.recentIllness}
+                      onChange={(e) => setMedicalForm({ ...medicalForm, recentIllness: e.target.checked })}
+                      className="rounded border-gray-300"
+                    />
+                    I've had a recent illness, surgery, or infection
+                  </label>
+                  {medicalForm.recentIllness && (
+                    <input
+                      value={medicalForm.illnessDetails}
+                      onChange={(e) => setMedicalForm({ ...medicalForm, illnessDetails: e.target.value })}
+                      placeholder="Briefly describe"
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
+                    />
+                  )}
+                  <input
+                    value={medicalForm.medications}
+                    onChange={(e) => setMedicalForm({ ...medicalForm, medications: e.target.value })}
+                    placeholder="Current medications (if any)"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
+                  />
+                  <textarea
+                    value={medicalForm.reportNotes}
+                    onChange={(e) => setMedicalForm({ ...medicalForm, reportNotes: e.target.value })}
+                    rows={3}
+                    placeholder="Notes from your last checkup / blood test (optional)"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
+                  />
+                  <button
+                    type="submit"
+                    disabled={submittingMedical}
+                    className="w-full bg-gray-800 text-white font-medium py-2.5 rounded-lg hover:bg-gray-900 transition disabled:opacity-60"
+                  >
+                    {submittingMedical ? "Submitting..." : "Submit for Medical Review"}
+                  </button>
+                </form>
+              </div>
             </div>
           )}
         </>

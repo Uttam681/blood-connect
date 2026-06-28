@@ -1,6 +1,7 @@
 const Donor = require("../models/Donor");
 const Match = require("../models/Match");
 const Request = require("../models/Request");
+const Hospital = require("../models/Hospital");
 
 // GET /api/donors?bloodGroup=O+&lat=..&lng=..&radiusKm=10&available=true
 const getDonors = async (req, res, next) => {
@@ -157,6 +158,21 @@ const getNearbyRequests = async (req, res, next) => {
         },
       },
       { $limit: 50 },
+      {
+        $lookup: {
+          from: "hospitals",
+          localField: "hospitalId",
+          foreignField: "_id",
+          as: "hospital",
+        },
+      },
+      { $unwind: { path: "$hospital", preserveNullAndEmptyArrays: true } },
+      {
+        $addFields: {
+          hospitalRegistrationCode: "$hospital.registrationCode",
+        },
+      },
+      { $project: { hospital: 0 } },
     ]);
 
     res.json({ success: true, count: requests.length, requests });
@@ -192,6 +208,40 @@ const getMyResponses = async (req, res, next) => {
   }
 };
 
+// PATCH /api/donors/me/medical  (donor only) — submit health declaration for review
+const submitMedicalDeclaration = async (req, res, next) => {
+  try {
+    const { hemoglobin, weight, recentIllness, illnessDetails, medications, reportNotes } = req.body;
+
+    const donor = await Donor.findOne({ userId: req.user._id });
+    if (!donor) return res.status(404).json({ success: false, message: "Donor profile not found" });
+
+    const reviewHospital = donor.city
+      ? await Hospital.findOne({ city: donor.city, isCityVerifier: true, status: "verified" })
+      : null;
+
+    donor.medicalDeclaration = {
+      hemoglobin,
+      weight,
+      recentIllness: !!recentIllness,
+      illnessDetails,
+      medications,
+      reportNotes,
+      submittedAt: new Date(),
+    };
+    donor.medicalStatus = "pending";
+    donor.medicalReviewHospitalId = reviewHospital?._id;
+    donor.medicalVerifiedBy = undefined;
+    donor.medicalVerifiedAt = undefined;
+    donor.medicalRejectionReason = undefined;
+    await donor.save();
+
+    res.json({ success: true, donor });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   getDonors,
   getDonorById,
@@ -199,5 +249,6 @@ module.exports = {
   getMyResponses,
   updateAvailability,
   updateMyProfile,
+  submitMedicalDeclaration,
   getNearbyRequests,
 };

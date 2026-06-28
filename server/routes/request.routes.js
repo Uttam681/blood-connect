@@ -5,6 +5,7 @@ const {
   getRequestById,
   updateRequestStatus,
   respondToMatch,
+  withdrawMatch,
   rematchRequest,
 } = require("../controllers/request.controller");
 const { protect, authorize } = require("../middleware/auth");
@@ -18,6 +19,7 @@ router.get("/me", authorize("patient"), getMyRequests);
 router.patch("/:id/status", authorize("patient"), updateRequestStatus);
 router.post("/:id/rematch", authorize("patient"), rematchRequest);
 router.post("/:id/respond", authorize("donor"), respondToMatch);
+router.post("/:id/withdraw", authorize("donor"), withdrawMatch);
 router.get("/:id", getRequestById);
 
 module.exports = router;

@@ -16,7 +16,7 @@ const matchSchema = new mongoose.Schema(
     notifiedAt: { type: Date },
     donorResponse: {
       type: String,
-      enum: ["pending", "accepted", "declined"],
+      enum: ["pending", "accepted", "declined", "withdrawn"],
       default: "pending",
     },
     respondedAt: { type: Date },

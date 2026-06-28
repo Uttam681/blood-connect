@@ -324,22 +324,144 @@ automatically updates the `2dsphere` index on write.
 ### Q: How does the Re-match button work?
 **A:** `POST /api/requests/:id/rematch` (patient-only). The controller:
 1. Verifies the request belongs to this patient (`patientId` check)
-2. Confirms status is `"open"` (fulfilled/cancelled requests can't be re-matched)
+2. Confirms status is `"open"` or `"matched"`, **and** that no `Match` exists yet with
+   `donorResponse: "accepted"` for this request (see §13 below for why this check matters)
 3. Calls `findAndRecordMatches(request, radiusKm)` — same service as request creation
-4. Returns `{ newMatchesFound }` count
+4. Returns `{ matchesFound }` count
 
 The frontend shows the count in a success toast. Useful when the first match radius was
-too small or all initial donors declined.
+too small, all initial donors declined, or a confirmed donor later withdrew.
 
 ### Q: How does the status filter work on the frontend?
 **A:** `GET /requests/me` fetches all requests once. The status filter pills
-(All / Open / Matched / Fulfilled / Cancelled) are client-side — they just filter
-the already-loaded `requests` array by `r.status`. No extra API calls on tab switch,
-which keeps it snappy.
+(All / Pending Verification / Open / Matched / Fulfilled / Cancelled) are client-side —
+they just filter the already-loaded `requests` array by `r.status`. No extra API calls
+on tab switch, which keeps it snappy.
 
 ---
 
-## 11. Possible "What would you improve?" Answers
+## 12. Hospital Verification Registry (anti-fraud / anti-trafficking)
+
+### Q: Why add a hospital verification step at all?
+**A:** Originally, patients typed a free-text hospital name and address, which gets
+geocoded and used to find nearby donors. Nothing stopped someone from inventing a fake
+hospital purely to harvest donor names/phone numbers, or to disguise an illegitimate
+blood request as a legitimate medical one. A platform that connects strangers around a
+sensitive resource like blood is a believable vector for that kind of abuse, so I added
+a `Hospital` registry: every request must reference a hospital that's either already
+admin-verified or has been submitted and is awaiting one-time review.
+
+### Q: Why verify the *hospital* once instead of reviewing every request?
+**A:** Reviewing every request manually would defeat the platform's purpose — a
+`critical` urgency request needs to reach donors in minutes, not after an admin wakes up
+to approve it. Verifying the **hospital** is a one-time cost (a hospital doesn't change
+identity request-to-request), so after the first approval, every subsequent request
+against that hospital is instant. This shifts admin work from "per request" (unscalable)
+to "per hospital" (rare, thorough, and worth the wait once).
+
+### Q: Walk me through what happens when a patient submits an unlisted hospital.
+**A:**
+1. `POST /api/hospitals` creates a `Hospital` doc with `status: "pending"`.
+2. The patient's request is still created (`POST /api/requests`), but because the
+   referenced hospital isn't `"verified"`, it's saved with `status: "pending_verification"`
+   and **`findAndRecordMatches` is never called for it** — so no donor ever sees it.
+3. When an admin approves the hospital (`PATCH /api/admin/hospitals/:id/verify`), the
+   controller finds every `Request` with `hospitalId` pointing at it and
+   `status: "pending_verification"`, runs matching on each, and flips them to
+   `open`/`matched` as appropriate — fully automatic, no patient action needed.
+4. If the admin rejects the hospital instead, those same pending requests are bulk
+   `cancelled` via `Request.updateMany`.
+
+### Q: How is the registration code generated, and why?
+**A:** `crypto.randomBytes(4).toString("hex").toUpperCase()` prefixed with `"BH-"`
+(e.g. `BH-A1B2C3D4`) — assigned the first time a hospital is verified, then reused on
+any later re-verification. It gives donors and patients a visible, copy-pasteable
+"this hospital is real" signal in the UI (shown next to the hospital name wherever it
+appears), beyond just a green checkmark.
+
+---
+
+## 13. Backup Donor Safety Net (handling last-minute cancellations)
+
+### Q: What happens if a donor accepts a match and then can't show up?
+**A:** This was a real gap I found and fixed. Originally, accepting a match only updated
+the `Match.donorResponse` field — `Request.status` was untouched. Two problems stacked on
+top of each other:
+1. There was no way for a donor to undo an acceptance.
+2. The re-match endpoints (`POST /requests/:id/rematch` and the admin equivalent)
+   rejected anything where `request.status !== "open"` — but status flips to `"matched"`
+   the instant *any* donor is found nearby, **before** anyone actually accepts. So once
+   a donor accepted (status stayed `"matched"`), the patient was structurally blocked
+   from re-matching even if that donor later ghosted them — exactly the scenario that
+   matters most for patient safety.
+
+### Q: How did you fix it?
+**A:** Two changes:
+1. **Added a `"withdrawn"` value** to `Match.donorResponse` and a new endpoint,
+   `POST /requests/:id/withdraw` (donor-only). It flips the donor's own accepted match
+   to `"withdrawn"`, then immediately calls `findAndRecordMatches` again to look for
+   backup donors, and recomputes the request's status (`"matched"` if backups were
+   found, `"open"` otherwise).
+2. **Fixed the re-match gate** to check for an actual confirmed donor instead of the
+   `"open"` status string:
+   ```js
+   const hasConfirmedDonor = await Match.exists({ requestId: request._id, donorResponse: "accepted" });
+   if (hasConfirmedDonor) return res.status(400).json({ message: "...already has a confirmed donor" });
+   ```
+   Now re-match works whenever there's *no one actually committed* — whether that's
+   because no one responded yet, everyone declined, or the one donor who accepted just
+   withdrew.
+
+### Q: Why not block `Accept` entirely until some deadline, or auto-assign a queue of backups?
+**A:** That's the more complete version of this (timed responses, ranked backup queues)
+and it's on the roadmap, but it needs a scheduler/cron — which this project doesn't have
+yet. The withdraw + confirmed-donor-aware re-match combination covers the most damaging
+case (a donor backs out) without needing background jobs, and is a reasonable scope
+boundary for now.
+
+---
+
+## 14. Donor Medical Clearance & Cooldown
+
+### Q: How do you make sure donors are actually fit to donate?
+**A:** Two layers, deliberately scoped narrow:
+1. A **90-day post-donation cooldown**, enforced inside the `$geoNear` query itself
+   (`lastDonationDate` must be null or older than 90 days) — not just a UI hint, so it
+   can't be bypassed by hitting the API directly.
+2. A **self-declared Medical Declaration** (hemoglobin, weight, recent illness,
+   medications, free-text notes) that a donor submits from their dashboard, which an
+   admin reviews and either `clears` or `rejects`. A `rejected` donor is excluded from
+   the matching query the same way a cooldown donor is
+   (`medicalStatus: { $ne: "rejected" }`).
+
+### Q: Why not let donors upload an actual medical report/PDF for review?
+**A:** I deliberately avoided that. Storing real medical documents is protected health
+information — a meaningful legal/privacy liability that's disproportionate to what a
+project like this needs, especially with no object-storage/encryption infrastructure in
+place to do it responsibly. It also doesn't match how this works in practice: **final
+medical clearance (hemoglobin test, BP, vitals, recent-illness screening) always happens
+in person at the blood bank**, by trained staff, right before the actual draw — no
+software questionnaire replaces that. So the platform's job is narrower: catch the
+obviously-ineligible cases early (recent donation, admin-flagged health concern) so
+hospitals aren't dealing with wasted trips, while leaving the real clearance where it
+already happens.
+
+### Q: What's the "city medical verifier" hospital for?
+**A:** Hospitals in this system are a registry, not an actor that logs in — there's no
+"hospital staff" role yet. So when a donor submits a medical declaration, an **admin**
+is who actually clicks Clear/Reject. But to keep the review traceable to a real medical
+authority rather than "some admin, somewhere," each city can have exactly one verified
+hospital flagged `isCityVerifier: true` (toggling it on for one hospital automatically
+unsets it for any other hospital in the same city — enforced server-side, not just in
+the UI). Every new medical submission from a donor in that city is tagged with that
+hospital for audit purposes, even though the admin performs the click. It's a deliberate
+middle ground: real hospital-staff logins would be the more complete version of this,
+but that's a meaningfully bigger scope (a fourth role, hospital auth, hospital-specific
+permissions) than this feature needed to solve the actual problem.
+
+---
+
+## 15. Possible "What would you improve?" Answers
 
 - Add `express-validator` validation chains on all POST/PATCH bodies (currently manual checks).
 - Add refresh tokens / token blacklist for logout.
@@ -352,3 +474,10 @@ which keeps it snappy.
   mid-delete could leave orphaned documents; transactions + replica set would make it atomic).
 - Add a Redis cache for `GET /admin/stats` (recomputed from scratch on every request;
   fine for low traffic, but would benefit from a short TTL cache under load).
+- Add a response deadline per match (e.g. 30 min for critical urgency) that auto-skips to
+  the next nearest donor instead of relying on the donor to withdraw or the patient to
+  notice and manually re-match — needs a scheduled job, which doesn't exist yet.
+- Replace exact blood-group matching with a real ABO/Rh compatibility matrix (e.g. O- is
+  a universal donor) to widen the donor pool during emergencies.
+- Give hospitals their own login/role so medical review and request co-signing can be
+  performed by actual hospital staff instead of admin-on-their-behalf.

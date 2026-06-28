@@ -31,6 +31,25 @@ const donorSchema = new mongoose.Schema(
     city: { type: String, trim: true },
     state: { type: String, trim: true },
     pincode: { type: String, trim: true },
+
+    medicalStatus: {
+      type: String,
+      enum: ["unsubmitted", "pending", "cleared", "rejected"],
+      default: "unsubmitted",
+    },
+    medicalDeclaration: {
+      hemoglobin: Number,
+      weight: Number,
+      recentIllness: { type: Boolean, default: false },
+      illnessDetails: { type: String, trim: true },
+      medications: { type: String, trim: true },
+      reportNotes: { type: String, trim: true },
+      submittedAt: Date,
+    },
+    medicalReviewHospitalId: { type: mongoose.Schema.Types.ObjectId, ref: "Hospital" },
+    medicalVerifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    medicalVerifiedAt: Date,
+    medicalRejectionReason: { type: String, trim: true },
   },
   { timestamps: true }
 );

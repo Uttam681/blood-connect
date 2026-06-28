@@ -38,7 +38,16 @@ export default function RequestDetails() {
         <h1 className="text-2xl font-bold text-gray-800 mb-2">
           {request.bloodGroup} Request — {request.unitsNeeded} unit(s)
         </h1>
-        <p className="text-gray-600">{request.hospitalName}</p>
+        <div className="flex items-center gap-2">
+          <p className="text-gray-600">{request.hospitalName}</p>
+          {request.hospitalId?.status === "verified" ? (
+            <span className="text-xs text-green-600 font-medium">
+              ✓ Verified {request.hospitalId.registrationCode && `· ${request.hospitalId.registrationCode}`}
+            </span>
+          ) : request.hospitalId?.status === "pending" ? (
+            <span className="text-xs text-yellow-600 font-medium">Pending verification</span>
+          ) : null}
+        </div>
         {request.description && (
           <p className="text-sm text-gray-500 mt-1">{request.description}</p>
         )}

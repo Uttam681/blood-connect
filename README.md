@@ -7,7 +7,8 @@ role-based dashboards for donors, patients, and admins.
 
 Built as a full **MERN-stack** application: MongoDB, Express, React, Node.js — with
 **Passport.js (JWT + Google OAuth)** authentication, **Leaflet/OpenStreetMap** for maps,
-and a full **Admin dashboard** for platform management.
+a verified **Hospital registry** to prevent fraudulent requests, donor **medical
+clearance review**, and a full **Admin dashboard** for platform management.
 
 ---
 
@@ -39,8 +40,15 @@ unreliable. **BloodConnect** solves this by letting:
 - **Donors** register their blood group, availability, and a trusted location
   (hospital/blood bank — never a home address).
 - **Patients** search for donors by blood group and location, or raise an urgent
-  request that automatically finds and notifies nearby compatible donors.
-- **Admins** manage all users, donor availability, and requests from a central dashboard.
+  request — tied to a **verified hospital**, not free text — that automatically finds
+  and notifies nearby compatible donors.
+- **Admins** manage all users, donor availability, hospital verification, donor medical
+  clearance, and requests from a central dashboard.
+
+A platform like this is also an easy vector for **blood trafficking or fraudulent
+requests** if requests aren't tied to a real, verifiable location, and for **patient
+risk** if a donor backs out at the last minute with no fallback. BloodConnect addresses
+both directly — see the Trust & Safety features below.
 
 ---
 
@@ -51,31 +59,40 @@ unreliable. **BloodConnect** solves this by letting:
 - Toggle availability (`Available` / `Not Available`) directly from the dashboard header
 - **Nearby Requests tab** — view blood requests within 25 km, filtered by urgency (All / Critical / High / Medium / Low)
 - "Already Responded" badge on requests already acted on; Accept / Decline buttons for new ones
+- **Withdraw a previously accepted match** if you can no longer donate — immediately triggers a backup search so the patient isn't left stranded
 - **My Responses tab** — full response history: each match with your response badge, request status badge, distance, and response date
 - **Edit Profile tab** — update blood group, hospital/bank, address, city, state, pincode, last donation date (re-geocodes location on save)
+- **90-day donation cooldown** automatically enforced server-side — you won't be matched again until it clears, with the eligible-again date shown on your dashboard
+- **Medical Declaration** — submit hemoglobin, weight, recent illness, medications, and notes for admin/hospital review; rejected donors are automatically excluded from matching (final clearance always still happens in person at the blood bank)
 
 ### For Patients
 - Register with email/password **or sign in with Google** (one click, creates patient account automatically)
 - Profile details: age, gender, default city — editable any time via collapsible Edit Profile section
 - Search donors by blood group + location, in **list** or **interactive map** view
-- Raise an urgent blood request (blood group, units needed, urgency level, hospital)
-- Hospital name auto-appended with default city to prevent wrong-city geocoding
-- Confirm geocoded location before submitting (prevents ambiguous results)
-- Automatically matched with nearby available donors via geospatial query
-- **Status filter tabs** on My Requests: All / Open / Matched / Fulfilled / Cancelled
-- **Re-match button** on open requests — re-runs geo matching with 30 km radius to find new donors
-- Track request status (`open` → `matched` → `fulfilled` / `cancelled`)
+- Raise an urgent blood request (blood group, units needed, urgency level) tied to a **verified hospital** picked from a live search — no more free-typing a hospital name
+- Can't find your hospital? Submit it for admin verification — the request stays queued and invisible to donors until the hospital clears review
+- Automatically matched with nearby, eligible, available donors via geospatial query
+- **Status filter tabs** on My Requests: All / Pending Verification / Open / Matched / Fulfilled / Cancelled
+- **Re-match button** — re-runs geo matching with a wider radius whenever there's no *confirmed* donor yet (works even after a donor candidate was found but never accepted, or backed out)
+- Track request status (`pending_verification` → `open` → `matched` → `fulfilled` / `cancelled`)
 - View matched donor details with distance, contact, response status, and "View on Map"
 
 ### For Admins
-- Dedicated **Admin Dashboard** with stats cards, blood-group breakdown, and 3 tabs
-- **Stats row**: Total Donors, Total Patients, Open Requests, Fulfilled — from live aggregation
+- Dedicated **Admin Dashboard** with stats cards, blood-group breakdown, and 5 tabs
+- **Stats row**: Total Donors, Total Patients, Open Requests, Fulfilled, Pending Hospitals, Pending Medical Reviews — all from live aggregation
 - **Blood Group breakdown** — donor count per blood group across the platform
 - **Search bar** in every tab (name, email, blood group, hospital — client-side instant filter)
 - **Users tab**: all users with role dropdown (change inline), Verified/Unverified toggle, join date, delete
-- **Donors tab**: blood group badge, hospital, city, availability toggle
-- **Requests tab**: patient name+email, blood group, urgency badge, status badge, **Re-run Matching** button on open requests
+- **Donors tab**: blood group badge, hospital, city, medical status, availability toggle
+- **Requests tab**: patient name+email, blood group, urgency badge, status badge, **Re-run Matching** button
+- **Hospitals tab**: approve/reject submitted hospitals (assigns a unique registration code on approval, auto-activates any requests that were waiting on it), designate one hospital per city as the **medical verifier**
+- **Medical Reviews tab**: review donor health declarations (hemoglobin, weight, illness, medications, notes) and Clear/Reject — rejected donors stop appearing in matching immediately
 - Delete any user and cascade-delete all their associated data (profile + requests + matches)
+
+### Trust & Safety
+- **Hospital verification registry** — every blood request must be tied to a hospital/blood bank that's either already verified or submitted for one-time admin review, closing the most direct path for fraudulent or trafficking-related requests
+- **Backup donor safety net** — withdrawing from an accepted match auto-searches for a replacement donor instead of silently leaving the patient stuck; re-match is only blocked once a donor has actually *confirmed*, not merely been found nearby
+- **Donor medical clearance pipeline** — self-declared health checks reviewed by admin (on behalf of a designated city hospital), plus an automatic 90-day post-donation cooldown enforced at the matching-query level, not just the UI
 
 ### Platform
 - JWT-based authentication with role-based access control (donor / patient / admin)
@@ -121,25 +138,40 @@ flowchart TD
         RESP -->|Accept| ACC[✅ Accepted\ndistance + contact shown to patient]
         RESP -->|Decline| DEC[❌ Declined]
         RESP -->|Already responded| BADGE[Already Responded badge]
+        ACC --> WD{Can still donate?}
+        WD -->|No| WITHDRAW[Withdraw\nauto-finds backup donor]
+        WD -->|Yes| DONE[Donation completed]
         DD --> TAB2[My Responses Tab\nHistory: response + request status + date]
         DD --> TAB3[Edit Profile Tab\nBlood group · hospital · city · last donation]
+        TAB3 --> COOLDOWN{Last donation\n< 90 days ago?}
+        COOLDOWN -->|Yes| EXCLUDED[Excluded from matching\nuntil cooldown clears]
+        COOLDOWN -->|No| ELIGIBLE[Eligible for matching]
+        TAB3 --> MEDFORM[Medical Declaration\nHb · weight · illness · meds · notes]
+        MEDFORM --> MEDREVIEW{Admin / City\nHospital Review}
+        MEDREVIEW -->|Cleared| ELIGIBLE
+        MEDREVIEW -->|Rejected| EXCLUDED
     end
 
     %% ─── PATIENT FLOW ──────────────────────────────────────────
     subgraph PATIENT [" 🏥  Patient "]
         PD([Patient Dashboard])
         PD --> EP[Edit Profile\nAge · Gender · Default City]
-        PD --> RF[Raise Blood Request\nBlood Group · Units · Urgency · Hospital]
-        RF --> GEO[Geocode Hospital Address\ncity auto-appended · confirm location]
-        GEO --> MATCH{Geo-Match\n$geoNear within radius}
+        PD --> HSEARCH[Search Verified Hospitals\nby name or city]
+        HSEARCH -->|Found| HPICK[Pick Hospital\nshows registration code]
+        HSEARCH -->|Not found| HSUB[Submit New Hospital\nfor admin verification]
+        HSUB --> HPENDING[Request created as\nPending Verification]
+        HPICK --> RF[Raise Blood Request\nBlood Group · Units · Urgency]
+        RF --> MATCH{Geo-Match\n$geoNear within radius\nexcludes cooldown/rejected donors}
         MATCH -->|Donor found| MS[Status: Matched\nView donors · distance · contact]
         MATCH -->|No donor| OS[Status: Open]
-        OS --> RM[Re-match button\nExpand radius · find new donors]
+        HPENDING -.->|hospital verified| MATCH
+        OS --> RM[Re-match button\nworks until a donor confirms]
+        MS -->|donor withdraws| OS
         RM --> MATCH
         MS --> ACT{Update Request}
         ACT --> FUL[Mark Fulfilled]
         ACT --> CAN[Cancel]
-        PD --> SF[Status Filter\nAll·Open·Matched·Fulfilled·Cancelled]
+        PD --> SF[Status Filter\nincl. Pending Verification]
         PD --> SD[Search Donors\nBlood Group + Location]
         SD --> LM{View Mode}
         LM --> LIST[📋 List View\nCards with distance]
@@ -151,7 +183,7 @@ flowchart TD
     %% ─── ADMIN FLOW ────────────────────────────────────────────
     subgraph ADMIN [" 🔐  Admin "]
         AD([Admin Dashboard])
-        AD --> STATS[Stats Cards\nDonors · Patients · Open · Fulfilled]
+        AD --> STATS[Stats Cards\nDonors · Patients · Open · Fulfilled · Pending Hospitals · Pending Medical]
         AD --> BG[Blood Group Breakdown\nDonor count per group]
         AD --> SRCH[Search Bar\nFilter any tab by name·email·blood group]
         AD --> UT[Users Tab]
@@ -161,7 +193,14 @@ flowchart TD
         AD --> DT[Donors Tab]
         DT --> TOG[Toggle Availability\nOverride donor status]
         AD --> RT[Requests Tab]
-        RT --> RRM[Re-run Matching\nOpen requests only · finds new donors]
+        RT --> RRM[Re-run Matching\nworks until a donor confirms]
+        AD --> HT[Hospitals Tab]
+        HT --> HAPP[Approve\nissues registration code · activates pending requests]
+        HT --> HREJ[Reject\ncancels pending requests, with reason]
+        HT --> HCV[Set as City Medical Verifier\none per city]
+        AD --> MT[Medical Reviews Tab]
+        MT --> MCLEAR[Clear\ndonor eligible for matching]
+        MT --> MREJ[Reject\ndonor excluded from matching]
     end
 
     LOGIN -->|role = admin| AD
@@ -207,9 +246,9 @@ BloodConnect/
 │   │   │   ├── Register.jsx        # Role selector + Google OAuth button (patient)
 │   │   │   ├── OAuthCallback.jsx   # Handles ?token= redirect after Google auth
 │   │   │   ├── Dashboard.jsx       # Routes to Donor/Patient/Admin dashboard by role
-│   │   │   ├── AdminDashboard.jsx  # Stats cards · search · Users · Donors · Requests tabs
-│   │   │   ├── DonorDashboard.jsx  # Nearby Requests · My Responses · Edit Profile tabs
-│   │   │   ├── PatientDashboard.jsx# Edit Profile · Create Request · My Requests (status filter + re-match)
+│   │   │   ├── AdminDashboard.jsx  # Stats · search · Users/Donors/Requests/Hospitals/Medical Reviews tabs
+│   │   │   ├── DonorDashboard.jsx  # Nearby Requests · My Responses (+ Withdraw) · Edit Profile (+ Medical Declaration)
+│   │   │   ├── PatientDashboard.jsx# Edit Profile · Hospital picker · My Requests (status filter + re-match)
 │   │   │   ├── DonorList.jsx       # Search donors (list/map)
 │   │   │   ├── DonorDetails.jsx    # Donor profile + map pin
 │   │   │   └── RequestDetails.jsx  # Request + matched donors
@@ -223,22 +262,25 @@ BloodConnect/
 │   │   └── passport.js             # Local + JWT + Google OAuth strategies
 │   ├── models/
 │   │   ├── User.js                 # googleId field + optional password/phone for OAuth users
-│   │   ├── Donor.js
+│   │   ├── Donor.js                 # + medicalStatus/medicalDeclaration/medicalReviewHospitalId
 │   │   ├── Patient.js
-│   │   ├── Request.js
-│   │   └── Match.js
+│   │   ├── Request.js               # + hospitalId ref · "pending_verification" status
+│   │   ├── Match.js                 # donorResponse: pending|accepted|declined|withdrawn
+│   │   └── Hospital.js              # registry: status, registrationCode, isCityVerifier
 │   ├── controllers/
 │   │   ├── auth.controller.js      # register · login · getMe · googleCallback
-│   │   ├── admin.controller.js     # getStats · CRUD users/donors/requests · adminRematch · toggleVerified
-│   │   ├── donor.controller.js     # getMyProfile · getMyResponses · updateMyProfile · getNearbyRequests
+│   │   ├── admin.controller.js     # getStats · CRUD · hospital verify/reject/cityVerifier · medical reviews
+│   │   ├── donor.controller.js     # getMyProfile · getMyResponses · updateMyProfile · submitMedicalDeclaration
+│   │   ├── hospital.controller.js  # searchHospitals (verified only) · submitHospital (patient)
 │   │   ├── patient.controller.js
-│   │   └── request.controller.js   # createRequest · getMyRequests · rematchRequest · respondToMatch
+│   │   └── request.controller.js   # createRequest · rematchRequest · respondToMatch · withdrawMatch
 │   ├── routes/
 │   │   ├── auth.routes.js          # /register · /login · /me · /google · /google/callback
 │   │   ├── admin.routes.js         # All routes protected: protect + authorize("admin")
-│   │   ├── donor.routes.js         # /me · /me/responses · /me/availability · /requests/nearby
+│   │   ├── donor.routes.js         # /me · /me/responses · /me/availability · /me/medical · /requests/nearby
+│   │   ├── hospital.routes.js      # GET / (search) · POST / (submit, patient only)
 │   │   ├── patient.routes.js
-│   │   └── request.routes.js       # POST /:id/rematch · POST /:id/respond
+│   │   └── request.routes.js       # POST /:id/rematch · /:id/respond · /:id/withdraw
 │   ├── middleware/
 │   │   ├── auth.js                 # protect (JWT) + authorize (RBAC)
 │   │   └── errorHandler.js
@@ -257,8 +299,8 @@ BloodConnect/
 
 ## Database Design (MongoDB)
 
-Five collections, connected via `userId` / `patientId` / `donorId` / `requestId`
-references:
+Six collections, connected via `userId` / `patientId` / `donorId` / `requestId` /
+`hospitalId` references:
 
 ### `users`
 Shared identity for all roles.
@@ -280,7 +322,10 @@ Shared identity for all roles.
   isAvailable: Boolean,
   lastDonationDate,
   location: { type: "Point", coordinates: [lng, lat] },  // 2dsphere indexed
-  hospitalOrBank, address, city, state, pincode
+  hospitalOrBank, address, city, state, pincode,
+  medicalStatus: "unsubmitted" | "pending" | "cleared" | "rejected",
+  medicalDeclaration: { hemoglobin, weight, recentIllness, illnessDetails, medications, reportNotes, submittedAt },
+  medicalReviewHospitalId (ref Hospital), medicalVerifiedBy (ref User), medicalVerifiedAt, medicalRejectionReason
 }
 ```
 Indexes: `{ location: "2dsphere" }`, `{ bloodGroup: 1, isAvailable: 1 }`
@@ -293,14 +338,27 @@ Indexes: `{ location: "2dsphere" }`, `{ bloodGroup: 1, isAvailable: 1 }`
 }
 ```
 
+### `hospitals`
+```js
+{
+  _id, name, registrationCode (unique, assigned on verification, e.g. "BH-A1B2C3D4"),
+  address, city, state, pincode, contactPhone,
+  location: { type: "Point", coordinates: [lng, lat] },  // 2dsphere indexed
+  status: "pending" | "verified" | "rejected",
+  isCityVerifier: Boolean,  // at most one true per city — the designated medical reviewer
+  submittedBy (ref User), verifiedBy (ref User), verifiedAt, rejectionReason
+}
+```
+Indexes: `{ location: "2dsphere" }`, text index on `{ name, city }`
+
 ### `requests`
 ```js
 {
-  _id, patientId (ref Patient),
+  _id, patientId (ref Patient), hospitalId (ref Hospital),
   bloodGroup, unitsNeeded, urgency: "low"|"medium"|"high"|"critical",
   hospitalName, description,
-  location: { type: "Point", coordinates: [lng, lat] },  // 2dsphere indexed
-  status: "open" | "matched" | "fulfilled" | "expired" | "cancelled",
+  location: { type: "Point", coordinates: [lng, lat] },  // 2dsphere indexed, copied from hospital
+  status: "pending_verification" | "open" | "matched" | "fulfilled" | "expired" | "cancelled",
   expiresAt
 }
 ```
@@ -311,7 +369,7 @@ Indexes: `{ location: "2dsphere" }`, `{ status: 1, bloodGroup: 1 }`
 {
   _id, requestId (ref Request), donorId (ref Donor),
   distanceKm, notifiedAt,
-  donorResponse: "pending" | "accepted" | "declined",
+  donorResponse: "pending" | "accepted" | "declined" | "withdrawn",
   respondedAt
 }
 ```
@@ -339,9 +397,16 @@ Base URL: `/api`
 | GET    | `/:id`                    | —             | Donor details |
 | PATCH  | `/me/availability`        | JWT (donor)   | Toggle `isAvailable` |
 | PATCH  | `/me`                     | JWT (donor)   | Update donor profile/location |
+| PATCH  | `/me/medical`             | JWT (donor)   | Submit health declaration for admin/hospital review |
 | GET    | `/me`                     | JWT (donor)   | Own donor profile |
 | GET    | `/me/responses`           | JWT (donor)   | Response history (all matches for this donor) |
 | GET    | `/requests/nearby`        | JWT (donor)   | Blood requests near this donor |
+
+### Hospitals (`/api/hospitals`)
+| Method | Endpoint | Auth           | Description |
+|--------|----------|----------------|-------------|
+| GET    | `/`      | JWT            | Search verified hospitals: `?search=name-or-city` |
+| POST   | `/`      | JWT (patient)  | Submit a new hospital for admin verification |
 
 ### Patients (`/api/patients`)
 | Method | Endpoint | Auth           | Description |
@@ -352,41 +417,59 @@ Base URL: `/api`
 ### Requests (`/api/requests`)
 | Method | Endpoint            | Auth          | Description |
 |--------|---------------------|---------------|-------------|
-| POST   | `/`                 | JWT (patient) | Create a blood request → triggers geo-matching |
+| POST   | `/`                 | JWT (patient) | Create a blood request against a hospitalId → triggers geo-matching if verified, else queues as `pending_verification` |
 | GET    | `/me`               | JWT (patient) | List own requests |
 | GET    | `/:id`              | JWT           | Request details + matched donors |
 | PATCH  | `/:id/status`       | JWT (patient) | Update status (`fulfilled`/`cancelled`) |
 | POST   | `/:id/respond`      | JWT (donor)   | Accept/decline a match |
-| POST   | `/:id/rematch`      | JWT (patient) | Re-run geo matching on an open request |
+| POST   | `/:id/withdraw`     | JWT (donor)   | Back out of an accepted match → auto re-matches for a backup donor |
+| POST   | `/:id/rematch`      | JWT (patient) | Re-run geo matching — allowed any time there's no *confirmed* donor yet |
 
 ### Admin (`/api/admin`) — JWT + admin role required
-| Method | Endpoint                       | Description |
-|--------|--------------------------------|-------------|
-| GET    | `/stats`                       | Live aggregation: users by role, requests by status, donors by blood group |
-| GET    | `/users`                       | List all users |
-| GET    | `/donors`                      | List all donor profiles |
-| GET    | `/patients`                    | List all patient profiles |
-| GET    | `/requests`                    | List all blood requests |
-| PATCH  | `/users/:id/role`              | Change a user's role |
-| PATCH  | `/users/:id/verify`            | Toggle user's `isVerified` flag |
-| PATCH  | `/donors/:id/availability`     | Toggle donor availability |
-| POST   | `/requests/:id/rematch`        | Re-run geo matching on an open request |
-| DELETE | `/users/:id`                   | Delete user + cascade all associated data |
+| Method | Endpoint                          | Description |
+|--------|-----------------------------------|-------------|
+| GET    | `/stats`                          | Live aggregation: users by role, requests by status, donors by blood group, pending hospitals, pending medical reviews |
+| GET    | `/users`                          | List all users |
+| GET    | `/donors`                         | List all donor profiles |
+| GET    | `/donors/medical-reviews`         | List donor medical declarations: `?status=pending\|cleared\|rejected\|all` |
+| GET    | `/patients`                       | List all patient profiles |
+| GET    | `/requests`                       | List all blood requests |
+| GET    | `/hospitals`                      | List all hospitals (any status) |
+| PATCH  | `/users/:id/role`                 | Change a user's role |
+| PATCH  | `/users/:id/verify`               | Toggle user's `isVerified` flag |
+| PATCH  | `/donors/:id/availability`        | Toggle donor availability |
+| PATCH  | `/donors/:id/medical-review`      | Clear or reject a donor's medical declaration (`{decision, reason}`) |
+| PATCH  | `/hospitals/:id/verify`           | Approve a hospital — issues a registration code, activates any requests waiting on it |
+| PATCH  | `/hospitals/:id/reject`           | Reject a hospital (`{reason}`) — cancels any requests waiting on it |
+| PATCH  | `/hospitals/:id/city-verifier`    | Toggle this hospital as the city's designated medical verifier (unsets any sibling in the same city) |
+| POST   | `/requests/:id/rematch`           | Re-run geo matching — allowed any time there's no confirmed donor (30 km radius) |
+| DELETE | `/users/:id`                      | Delete user + cascade all associated data |
 
 ---
 
 ## Geo-Matching Logic
 
-When a patient creates a request, `services/matching.service.js` runs:
+When a patient creates a request (against a **verified** hospital), `services/matching.service.js` runs:
 
 ```js
+const cooldownCutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+
 Donor.aggregate([
   { $geoNear: {
       near: request.location,
       distanceField: "distanceMeters",
       maxDistance: radiusKm * 1000,
       spherical: true,
-      query: { bloodGroup: request.bloodGroup, isAvailable: true }
+      query: {
+        bloodGroup: request.bloodGroup,
+        isAvailable: true,
+        medicalStatus: { $ne: "rejected" },
+        $or: [
+          { lastDonationDate: { $exists: false } },
+          { lastDonationDate: null },
+          { lastDonationDate: { $lte: cooldownCutoff } },
+        ],
+      },
   }},
   { $limit: 20 }
 ]);
@@ -396,10 +479,28 @@ Matching donors are upserted into the `matches` collection (idempotent via the u
 `{requestId, donorId}` index), and the request status flips to `matched` if any donors
 are found.
 
-**Geocoding disambiguation:** when a patient types a hospital name without a city (e.g.
-`"Apollo Hospital"`), the frontend automatically appends their `defaultCity` before
-geocoding (`"Apollo Hospital, Hyderabad"`) and shows the resolved full address for
-confirmation — preventing wrong-city matches.
+**Eligibility filters baked into the query, not just the UI:**
+- Donors inside the **90-day post-donation cooldown** are excluded automatically — this
+  is enforced at the database query level, so it can't be bypassed by any client.
+- Donors whose **medical declaration was rejected** by admin/hospital review are excluded
+  the same way.
+
+**Re-match vs. confirmed donor:** a request's status flips to `matched` the moment
+*any* donor is found nearby — before anyone has actually accepted. Re-match (by patient
+or admin) is only blocked once a donor has truly **confirmed** (`donorResponse: "accepted"`
+on a `Match` doc) — checked via `Match.exists({ requestId, donorResponse: "accepted" })` —
+not merely when the status says "matched". This is what lets a patient recover when a
+candidate donor never responds, or withdraws.
+
+**Hospital verification gate:** requests against an unverified hospital are created with
+status `pending_verification` and **never enter this matching pipeline** until an admin
+approves the hospital — at which point `findAndRecordMatches` runs automatically for any
+requests that were waiting on it.
+
+**Geocoding disambiguation:** when a patient submits a *new* hospital for verification
+(rather than picking an already-verified one), the frontend automatically appends their
+`defaultCity` before geocoding (`"Apollo Hospital, Hyderabad"`) and shows the resolved
+full address for confirmation — preventing wrong-city matches.
 
 ---
 
@@ -499,19 +600,21 @@ const bcrypt = require('bcryptjs');
    patient account.
 2. **Donors** land on a three-tab dashboard:
    - **Nearby Requests** — filter by urgency, see "Already Responded" badge, accept or decline
-   - **My Responses** — full history of every match with response badge and request status
-   - **Edit Profile** — update blood group, location, last donation date
+   - **My Responses** — full history of every match with response badge and request status; **Withdraw** if you accepted but can no longer donate (auto-triggers a backup search)
+   - **Edit Profile** — update blood group, location, last donation date, and submit a **Medical Declaration** for review
 3. **Patients** land on their dashboard:
    - **Edit Profile** (collapsible) — update age, gender, default city
-   - **Raise a Blood Request** — hospital is geocoded (city auto-appended), resolved address confirmed before submit; backend runs `$geoNear` and reports match count
-   - **My Requests** — filter by status (All / Open / Matched / Fulfilled / Cancelled), re-match open requests, mark fulfilled or cancel
-4. From **My Requests**, patients open **Request Details** to see matched donors, their distance, contact info, and response status (pending/accepted/declined), plus a **"View on Map"** link.
+   - **Raise a Blood Request** — search and pick a **verified hospital** (or submit a new one for review if it's not listed yet); backend runs `$geoNear` (excluding donors in cooldown or medically rejected) and reports match count
+   - **My Requests** — filter by status (All / Pending Verification / Open / Matched / Fulfilled / Cancelled), re-match whenever there's no confirmed donor, mark fulfilled or cancel
+4. From **My Requests**, patients open **Request Details** to see matched donors, their distance, contact info, and response status (pending/accepted/declined/withdrawn), plus a **"View on Map"** link.
 5. Anyone (logged in or not) can use **Find Donors** to search by blood group and location, switching between card **list view** and interactive **Leaflet map**.
 6. **Admins** log in to the **Admin Dashboard**:
-   - Stats cards and blood-group breakdown at the top
+   - Stats cards (including pending hospitals / pending medical reviews) and blood-group breakdown at the top
    - Search bar filtering any tab instantly
    - Change user roles, toggle verified status, delete users with cascade
-   - Toggle donor availability, re-run matching on open requests
+   - Toggle donor availability, re-run matching on requests without a confirmed donor
+   - **Approve/reject submitted hospitals**, designate one **city medical verifier** hospital per city
+   - **Clear or reject donor medical declarations** — rejected donors stop appearing in matching immediately
 
 ---
 
@@ -526,7 +629,12 @@ const bcrypt = require('bcryptjs');
 - [x] Google OAuth sign-in / sign-up
 - [x] Donor — urgency filter, already-responded badge, response history tab, edit profile tab
 - [x] Patient — status filter, re-match button, edit profile section
+- [x] Hospital verification registry — anti-fraud/trafficking gate on every request
+- [x] Backup donor safety net — withdraw action + confirmed-donor-aware re-match gating
+- [x] Donor medical clearance — health declaration review + 90-day cooldown enforcement
 - [ ] Request expiry automation (scheduled job / TTL handling)
+- [ ] Response-deadline auto-skip-to-next-donor (currently manual re-match only)
+- [ ] ABO/Rh compatibility matrix instead of exact blood-group match
 - [ ] Pagination on donor/request lists
 - [ ] Automated tests (Jest + Supertest + mongodb-memory-server)
 

@@ -4,6 +4,12 @@ import {
   adminGetDonors,
   adminGetRequests,
   adminGetStats,
+  adminGetHospitals,
+  adminVerifyHospital,
+  adminRejectHospital,
+  adminSetCityVerifier,
+  adminGetMedicalReviews,
+  adminReviewDonorMedical,
   adminToggleDonorAvailability,
   adminUpdateUserRole,
   adminToggleVerified,
@@ -11,7 +17,14 @@ import {
   adminDeleteUser,
 } from "../api/endpoints";
 
-const TABS = ["Users", "Donors", "Requests"];
+const TABS = ["Users", "Donors", "Requests", "Hospitals", "Medical Reviews"];
+
+const MEDICAL_STATUS_COLORS = {
+  unsubmitted: "bg-gray-100 text-gray-500",
+  pending: "bg-yellow-100 text-yellow-700",
+  cleared: "bg-green-100 text-green-700",
+  rejected: "bg-red-100 text-red-700",
+};
 
 const ROLE_COLORS = {
   donor: "bg-blue-100 text-blue-700",
@@ -20,11 +33,18 @@ const ROLE_COLORS = {
 };
 
 const STATUS_COLORS = {
+  pending_verification: "bg-orange-100 text-orange-700",
   open: "bg-yellow-100 text-yellow-700",
   matched: "bg-blue-100 text-blue-700",
   fulfilled: "bg-green-100 text-green-700",
   expired: "bg-gray-100 text-gray-500",
   cancelled: "bg-red-100 text-red-700",
+};
+
+const HOSPITAL_STATUS_COLORS = {
+  pending: "bg-yellow-100 text-yellow-700",
+  verified: "bg-green-100 text-green-700",
+  rejected: "bg-red-100 text-red-700",
 };
 
 const URGENCY_COLORS = {
@@ -33,6 +53,8 @@ const URGENCY_COLORS = {
   high: "bg-orange-100 text-orange-700",
   critical: "bg-red-100 text-red-700",
 };
+
+const formatStatus = (s) => s.replace(/_/g, " ");
 
 function StatCard({ label, value, sub }) {
   return (
@@ -49,27 +71,35 @@ export default function AdminDashboard() {
   const [users, setUsers] = useState([]);
   const [donors, setDonors] = useState([]);
   const [requests, setRequests] = useState([]);
+  const [hospitals, setHospitals] = useState([]);
+  const [medicalReviews, setMedicalReviews] = useState([]);
   const [stats, setStats] = useState(null);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [rematching, setRematching] = useState(null);
+  const [verifyingHospital, setVerifyingHospital] = useState(null);
+  const [reviewingDonor, setReviewingDonor] = useState(null);
 
   const load = async () => {
     setLoading(true);
     setError("");
     try {
-      const [u, d, r, s] = await Promise.all([
+      const [u, d, r, s, h, m] = await Promise.all([
         adminGetUsers(),
         adminGetDonors(),
         adminGetRequests(),
         adminGetStats(),
+        adminGetHospitals(),
+        adminGetMedicalReviews("pending"),
       ]);
       setUsers(u.data.users);
       setDonors(d.data.donors);
       setRequests(r.data.requests);
       setStats(s.data);
+      setHospitals(h.data.hospitals);
+      setMedicalReviews(m.data.donors);
     } catch (err) {
       setError(err.response?.data?.message || "Failed to load data");
     } finally {
@@ -104,12 +134,75 @@ export default function AdminDashboard() {
     setError(""); setSuccess(""); setRematching(requestId);
     try {
       const res = await adminRematch(requestId);
-      setSuccess(`Re-match for request ${requestId.slice(-6)} — found ${res.data.newMatchesFound ?? 0} new donor(s).`);
+      setSuccess(`Re-match for request ${requestId.slice(-6)} — found ${res.data.matchesFound ?? 0} donor(s) nearby.`);
       load();
     } catch (err) {
       setError(err.response?.data?.message || "Re-match failed");
     } finally {
       setRematching(null);
+    }
+  };
+
+  const handleVerifyHospital = async (hospitalId, name) => {
+    setError(""); setSuccess(""); setVerifyingHospital(hospitalId);
+    try {
+      const res = await adminVerifyHospital(hospitalId);
+      setSuccess(`"${name}" verified — code ${res.data.hospital.registrationCode}. ${res.data.activatedRequests} pending request(s) activated.`);
+      load();
+    } catch (err) {
+      setError(err.response?.data?.message || "Verification failed");
+    } finally {
+      setVerifyingHospital(null);
+    }
+  };
+
+  const handleRejectHospital = async (hospitalId, name) => {
+    const reason = window.prompt(`Reject "${name}"? Enter a reason (shown for audit purposes):`);
+    if (reason === null) return;
+    setError(""); setSuccess(""); setVerifyingHospital(hospitalId);
+    try {
+      const res = await adminRejectHospital(hospitalId, reason);
+      setSuccess(`"${name}" rejected. ${res.data.cancelledRequests} pending request(s) cancelled.`);
+      load();
+    } catch (err) {
+      setError(err.response?.data?.message || "Rejection failed");
+    } finally {
+      setVerifyingHospital(null);
+    }
+  };
+
+  const handleSetCityVerifier = async (hospitalId, name) => {
+    setError(""); setSuccess(""); setVerifyingHospital(hospitalId);
+    try {
+      const res = await adminSetCityVerifier(hospitalId);
+      setSuccess(
+        res.data.hospital.isCityVerifier
+          ? `"${name}" is now the main medical verifier for its city.`
+          : `"${name}" is no longer the city's medical verifier.`
+      );
+      load();
+    } catch (err) {
+      setError(err.response?.data?.message || "Failed to update");
+    } finally {
+      setVerifyingHospital(null);
+    }
+  };
+
+  const handleReviewMedical = async (donorId, name, decision) => {
+    let reason;
+    if (decision === "rejected") {
+      reason = window.prompt(`Reject ${name}'s medical declaration? Enter a reason:`);
+      if (reason === null) return;
+    }
+    setError(""); setSuccess(""); setReviewingDonor(donorId);
+    try {
+      await adminReviewDonorMedical(donorId, decision, reason);
+      setSuccess(`${name} marked as ${decision}.`);
+      load();
+    } catch (err) {
+      setError(err.response?.data?.message || "Review failed");
+    } finally {
+      setReviewingDonor(null);
     }
   };
 
@@ -134,6 +227,11 @@ export default function AdminDashboard() {
   const filteredRequests = requests.filter(
     (r) => !q || r.patientId?.userId?.name?.toLowerCase().includes(q) || r.hospitalName?.toLowerCase().includes(q) || r.bloodGroup?.toLowerCase().includes(q)
   );
+  const filteredHospitals = hospitals.filter(
+    (h) => !q || h.name?.toLowerCase().includes(q) || h.city?.toLowerCase().includes(q) || h.registrationCode?.toLowerCase().includes(q)
+  );
+  const pendingHospitalCount = stats?.pendingHospitals ?? 0;
+  const pendingMedicalCount = stats?.pendingMedicalReviews ?? 0;
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-8">
@@ -144,11 +242,13 @@ export default function AdminDashboard() {
 
       {/* Stats cards */}
       {stats && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-8">
+        <div className="grid grid-cols-2 sm:grid-cols-6 gap-3 mb-8">
           <StatCard label="Donors" value={totalDonors} />
           <StatCard label="Patients" value={totalPatients} />
           <StatCard label="Open Requests" value={openRequests} />
           <StatCard label="Fulfilled" value={fulfilledRequests} />
+          <StatCard label="Pending Hospitals" value={pendingHospitalCount} sub={pendingHospitalCount > 0 ? "Needs review" : undefined} />
+          <StatCard label="Pending Medical" value={pendingMedicalCount} sub={pendingMedicalCount > 0 ? "Needs review" : undefined} />
         </div>
       )}
 
@@ -178,6 +278,11 @@ export default function AdminDashboard() {
               }`}
             >
               {t}
+              {t === "Medical Reviews" && medicalReviews.length > 0 && (
+                <span className="ml-1.5 bg-orange-500 text-white text-xs px-1.5 py-0.5 rounded-full">
+                  {medicalReviews.length}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -266,12 +371,13 @@ export default function AdminDashboard() {
                     <th className="px-4 py-3 font-medium">Blood Group</th>
                     <th className="px-4 py-3 font-medium">Hospital / Bank</th>
                     <th className="px-4 py-3 font-medium">City</th>
+                    <th className="px-4 py-3 font-medium">Medical</th>
                     <th className="px-4 py-3 font-medium">Availability</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {filteredDonors.length === 0 ? (
-                    <tr><td colSpan={6} className="px-4 py-6 text-gray-400 text-center">No donors found</td></tr>
+                    <tr><td colSpan={7} className="px-4 py-6 text-gray-400 text-center">No donors found</td></tr>
                   ) : filteredDonors.map((d) => (
                     <tr key={d._id} className="hover:bg-gray-50">
                       <td className="px-4 py-3 font-medium text-gray-800">{d.userId?.name || "—"}</td>
@@ -283,6 +389,11 @@ export default function AdminDashboard() {
                       </td>
                       <td className="px-4 py-3 text-gray-600">{d.hospitalOrBank}</td>
                       <td className="px-4 py-3 text-gray-500">{d.city || "—"}</td>
+                      <td className="px-4 py-3">
+                        <span className={`text-xs font-medium px-2 py-0.5 rounded-full capitalize ${MEDICAL_STATUS_COLORS[d.medicalStatus]}`}>
+                          {d.medicalStatus || "unsubmitted"}
+                        </span>
+                      </td>
                       <td className="px-4 py-3">
                         <button
                           onClick={() => handleToggleAvailability(d._id)}
@@ -338,15 +449,20 @@ export default function AdminDashboard() {
                           {r.urgency}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-gray-600">{r.hospitalName}</td>
+                      <td className="px-4 py-3 text-gray-600">
+                        {r.hospitalName}
+                        {r.hospitalId?.status === "verified" && (
+                          <div className="text-xs text-green-600">✓ {r.hospitalId.registrationCode}</div>
+                        )}
+                      </td>
                       <td className="px-4 py-3">
                         <span className={`text-xs font-medium px-2 py-0.5 rounded-full capitalize ${STATUS_COLORS[r.status]}`}>
-                          {r.status}
+                          {formatStatus(r.status)}
                         </span>
                       </td>
                       <td className="px-4 py-3 text-gray-400">{new Date(r.createdAt).toLocaleDateString()}</td>
                       <td className="px-4 py-3">
-                        {r.status === "open" && (
+                        {["open", "matched"].includes(r.status) && (
                           <button
                             onClick={() => handleRematch(r._id)}
                             disabled={rematching === r._id}
@@ -358,6 +474,154 @@ export default function AdminDashboard() {
                       </td>
                     </tr>
                   ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Hospitals tab */}
+          {tab === "Hospitals" && (
+            <div className="overflow-x-auto rounded-xl border border-gray-200">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-gray-600 text-left">
+                  <tr>
+                    <th className="px-4 py-3 font-medium">Name</th>
+                    <th className="px-4 py-3 font-medium">City</th>
+                    <th className="px-4 py-3 font-medium">Submitted By</th>
+                    <th className="px-4 py-3 font-medium">Reg. Code</th>
+                    <th className="px-4 py-3 font-medium">Status</th>
+                    <th className="px-4 py-3 font-medium">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {filteredHospitals.length === 0 ? (
+                    <tr><td colSpan={6} className="px-4 py-6 text-gray-400 text-center">No hospitals found</td></tr>
+                  ) : filteredHospitals.map((h) => (
+                    <tr key={h._id} className="hover:bg-gray-50">
+                      <td className="px-4 py-3 font-medium text-gray-800">
+                        {h.name}
+                        {h.address && <div className="text-xs text-gray-400">{h.address}</div>}
+                        {h.status === "rejected" && h.rejectionReason && (
+                          <div className="text-xs text-red-500 mt-0.5">Reason: {h.rejectionReason}</div>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-gray-600">{h.city}</td>
+                      <td className="px-4 py-3 text-gray-500">
+                        {h.submittedBy?.name || "—"}
+                        {h.submittedBy?.email && <div className="text-xs text-gray-400">{h.submittedBy.email}</div>}
+                      </td>
+                      <td className="px-4 py-3 text-gray-600 font-mono text-xs">{h.registrationCode || "—"}</td>
+                      <td className="px-4 py-3">
+                        <span className={`text-xs font-medium px-2 py-0.5 rounded-full capitalize ${HOSPITAL_STATUS_COLORS[h.status]}`}>
+                          {h.status}
+                        </span>
+                        {h.isCityVerifier && (
+                          <div className="text-xs text-purple-600 font-medium mt-0.5">★ City medical verifier</div>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        {h.status === "pending" ? (
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => handleVerifyHospital(h._id, h.name)}
+                              disabled={verifyingHospital === h._id}
+                              className="text-green-600 text-xs font-medium hover:underline disabled:opacity-50"
+                            >
+                              {verifyingHospital === h._id ? "Working..." : "Approve"}
+                            </button>
+                            <button
+                              onClick={() => handleRejectHospital(h._id, h.name)}
+                              disabled={verifyingHospital === h._id}
+                              className="text-red-500 text-xs font-medium hover:underline disabled:opacity-50"
+                            >
+                              Reject
+                            </button>
+                          </div>
+                        ) : h.status === "verified" ? (
+                          <button
+                            onClick={() => handleSetCityVerifier(h._id, h.name)}
+                            disabled={verifyingHospital === h._id}
+                            className="text-purple-600 text-xs font-medium hover:underline disabled:opacity-50"
+                          >
+                            {h.isCityVerifier ? "Unset city verifier" : "Set as city verifier"}
+                          </button>
+                        ) : (
+                          <span className="text-xs text-gray-400">
+                            {h.verifiedBy?.name ? `by ${h.verifiedBy.name}` : "—"}
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Medical Reviews tab */}
+          {tab === "Medical Reviews" && (
+            <div className="overflow-x-auto rounded-xl border border-gray-200">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-gray-600 text-left">
+                  <tr>
+                    <th className="px-4 py-3 font-medium">Donor</th>
+                    <th className="px-4 py-3 font-medium">Declaration</th>
+                    <th className="px-4 py-3 font-medium">City Verifier</th>
+                    <th className="px-4 py-3 font-medium">Status</th>
+                    <th className="px-4 py-3 font-medium">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {medicalReviews.length === 0 ? (
+                    <tr><td colSpan={5} className="px-4 py-6 text-gray-400 text-center">No pending medical reviews</td></tr>
+                  ) : medicalReviews.map((d) => {
+                    const decl = d.medicalDeclaration || {};
+                    return (
+                      <tr key={d._id} className="hover:bg-gray-50">
+                        <td className="px-4 py-3 font-medium text-gray-800">
+                          {d.userId?.name || "—"}
+                          <div className="text-xs text-gray-400">{d.userId?.email} · {d.bloodGroup}</div>
+                        </td>
+                        <td className="px-4 py-3 text-gray-600 text-xs max-w-xs">
+                          {decl.hemoglobin && <div>Hb: {decl.hemoglobin} g/dL</div>}
+                          {decl.weight && <div>Weight: {decl.weight} kg</div>}
+                          {decl.recentIllness && (
+                            <div className="text-orange-600">Recent illness: {decl.illnessDetails || "yes"}</div>
+                          )}
+                          {decl.medications && <div>Meds: {decl.medications}</div>}
+                          {decl.reportNotes && <div className="text-gray-400 italic mt-0.5">"{decl.reportNotes}"</div>}
+                        </td>
+                        <td className="px-4 py-3 text-gray-500">
+                          {d.medicalReviewHospitalId?.name || (
+                            <span className="text-gray-400">No city verifier assigned</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className={`text-xs font-medium px-2 py-0.5 rounded-full capitalize ${MEDICAL_STATUS_COLORS[d.medicalStatus]}`}>
+                            {d.medicalStatus}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => handleReviewMedical(d._id, d.userId?.name || "Donor", "cleared")}
+                              disabled={reviewingDonor === d._id}
+                              className="text-green-600 text-xs font-medium hover:underline disabled:opacity-50"
+                            >
+                              Clear
+                            </button>
+                            <button
+                              onClick={() => handleReviewMedical(d._id, d.userId?.name || "Donor", "rejected")}
+                              disabled={reviewingDonor === d._id}
+                              className="text-red-500 text-xs font-medium hover:underline disabled:opacity-50"
+                            >
+                              Reject
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

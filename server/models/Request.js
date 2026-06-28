@@ -18,6 +18,7 @@ const requestSchema = new mongoose.Schema(
       enum: ["low", "medium", "high", "critical"],
       default: "medium",
     },
+    hospitalId: { type: mongoose.Schema.Types.ObjectId, ref: "Hospital", required: true },
     hospitalName: { type: String, required: true, trim: true },
     description: { type: String, trim: true },
     location: {
@@ -33,7 +34,7 @@ const requestSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["open", "matched", "fulfilled", "expired", "cancelled"],
+      enum: ["pending_verification", "open", "matched", "fulfilled", "expired", "cancelled"],
       default: "open",
     },
     expiresAt: { type: Date },
