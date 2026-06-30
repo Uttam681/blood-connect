@@ -17,7 +17,22 @@ connectDB();
 
 const app = express();
 
-app.use(cors({ origin: process.env.CLIENT_ORIGIN, credentials: true }));
+// CLIENT_ORIGIN supports a comma-separated list so the deployed frontend and
+// a local dev frontend can both reach this backend during the deploy/testing phase.
+const allowedOrigins = (process.env.CLIENT_ORIGIN || "")
+  .split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+      callback(new Error("Not allowed by CORS"));
+    },
+    credentials: true,
+  })
+);
 app.use(express.json());
 app.use(morgan("dev"));
 app.use(passport.initialize());

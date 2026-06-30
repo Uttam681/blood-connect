@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { geocodeAddress } from "../utils/geocode";
 
-const GOOGLE_AUTH_URL = "http://localhost:5000/api/auth/google";
+const GOOGLE_AUTH_URL = `${import.meta.env.VITE_API_URL || "http://localhost:5000/api"}/auth/google`;
 
 const BLOOD_GROUPS = ["A+", "A-", "B+", "B-", "O+", "O-", "AB+", "AB-"];
 
