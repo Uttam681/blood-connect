@@ -10,10 +10,24 @@ Built as a full **MERN-stack** application: MongoDB, Express, React, Node.js —
 a verified **Hospital registry** to prevent fraudulent requests, donor **medical
 clearance review**, and a full **Admin dashboard** for platform management.
 
+## 🌐 Live Demo
+
+| | |
+|---|---|
+| **Frontend (Vercel)** | [blood-connect-rho-ten.vercel.app](https://blood-connect-rho-ten.vercel.app) |
+| **Backend API (Render)** | [blood-connect-x46x.onrender.com](https://blood-connect-x46x.onrender.com/api/health) |
+| **Database** | MongoDB Atlas (M0 free tier) |
+| **Admin login** | `admin@bloodconnect.app` / `admin@123` |
+
+> ⚠️ The backend is on Render's free tier, which **spins down after 15 minutes of
+> inactivity** — the first request after idle time can take 30–50 seconds to wake it
+> back up. Subsequent requests are fast. This is a free-tier limitation, not a bug.
+
 ---
 
 ## Table of Contents
 
+- [Live Demo](#-live-demo)
 - [Problem Statement](#problem-statement)
 - [Key Features](#key-features)
 - [Platform Flow](#platform-flow)
@@ -25,6 +39,7 @@ clearance review**, and a full **Admin dashboard** for platform management.
 - [Getting Started](#getting-started)
 - [Environment Variables](#environment-variables)
 - [Default Admin Account](#default-admin-account)
+- [Deployment](#deployment)
 - [Application Walkthrough](#application-walkthrough)
 - [Roadmap / Stretch Goals](#roadmap--stretch-goals)
 - [Interview Prep](#interview-prep)
@@ -590,6 +605,42 @@ const bcrypt = require('bcryptjs');
 })();
 "
 ```
+
+---
+
+## Deployment
+
+The live demo runs on three separate free-tier services:
+
+| Layer | Platform | Notes |
+|---|---|---|
+| Frontend | [Vercel](https://vercel.com) | Static Vite build, root directory `client`, auto-deploys on push to `main` |
+| Backend | [Render](https://render.com) | Node web service, root directory `server`, build `npm install`, start `npm start` |
+| Database | [MongoDB Atlas](https://www.mongodb.com/cloud/atlas) | M0 free cluster, IP access list set to `0.0.0.0/0` (required since Render's free tier has no static outbound IP) |
+
+### Deploying your own copy
+
+**1. MongoDB Atlas**
+- Create a free M0 cluster
+- Database Access → add a database user with a generated password
+- Network Access → **Add IP Address → Allow Access from Anywhere** (`0.0.0.0/0`) — Render's free tier doesn't have a fixed IP, so a specific-IP allowlist will cause every connection to fail
+- Connect → Drivers → copy the connection string, substitute the real password, and insert the database name (`bloodconnect`) before the `?` query params
+
+**2. Render (backend)**
+- New Web Service → connect your fork → Root Directory `server`, Build Command `npm install`, Start Command `npm start`
+- Add all env vars from `server/.env.example`, including the Atlas `MONGO_URI`
+- Once deployed, copy the `*.onrender.com` URL back into `GOOGLE_CALLBACK_URL`
+
+**3. Vercel (frontend)**
+- New Project → same repo → Root Directory `client` (auto-detects Vite)
+- Add `VITE_API_URL` = `https://<your-render-url>.onrender.com/api`
+- Deploy
+
+**4. Wire CORS back together**
+- On Render, set `CLIENT_ORIGIN` to your Vercel URL (comma-separated with `http://localhost:5173` if you also want local dev to keep working against the same backend)
+
+### Known limitation
+Render's free instance type spins down after ~15 minutes of inactivity. The first request after idle time triggers a cold start (30–50 seconds) before the app responds normally. This is a free-tier constraint, not an application bug — upgrading the Render instance type (or pinging the health endpoint on a schedule) removes it.
 
 ---
 
